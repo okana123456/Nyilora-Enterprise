@@ -33,7 +33,7 @@ serve(async (req) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL")?.trim() || "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim() || "";
   const setupKey = Deno.env.get("NYILORA_ADMIN_SETUP_KEY")?.trim() || "";
-  if (!supabaseUrl || !serviceKey || !setupKey || new URL(supabaseUrl).hostname !== PROJECT_HOST) {
+  if (!supabaseUrl || !serviceKey || new URL(supabaseUrl).hostname !== PROJECT_HOST) {
     return json({ ok: false, message: "Nyilora administrator setup is not configured." }, 503);
   }
 
@@ -44,8 +44,9 @@ serve(async (req) => {
     const { count, error: countError } = await admin.from("loan_staff")
       .select("id", { count: "exact", head: true }).eq("business_id", BUSINESS_ID);
     if (countError) throw countError;
-    if (req.method === "GET") return json({ ok: true, available: count === 0 });
+    if (req.method === "GET") return json({ ok: true, available: count === 0 && setupKey.length >= 32 });
     if (count !== 0) return json({ ok: false, message: "First administrator setup is already complete." }, 409);
+    if (setupKey.length < 32) return json({ ok: false, message: "Nyilora administrator setup is not configured." }, 503);
 
     const body = await req.json().catch(() => ({}));
     const suppliedKey = String(body.admin_key || "").trim();
