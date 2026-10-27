@@ -231,7 +231,7 @@ tr:hover{background:rgba(255,213,0,.18)}
 <div id="authContainer">
   <div class="auth-tabs" style="margin-bottom:20px">
     <button class="auth-tab active" id="tabSignIn" onclick="switchAuthTab('signin')">Sign In</button>
-    <button class="auth-tab" id="tabSignUp" onclick="switchAuthTab('signup')">Sign Up</button>
+    <button class="auth-tab" id="tabSignUp" onclick="switchAuthTab('signup')">First Admin Setup</button>
   </div>
 
   <div id="panelSignIn">
@@ -255,11 +255,7 @@ tr:hover{background:rgba(255,213,0,.18)}
   </div>
 
   <div id="panelSignUp" style="display:none">
-    <button class="btn btn-google" style="width:100%;padding:12px;margin-bottom:12px" onclick="signInWithGoogle()">
-      <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-      Sign up with Google
-    </button>
-    <div class="auth-divider">or sign up with email</div>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px">Set up Nyilora's first administrator using the private setup key. Future staff accounts are added by that administrator.</p>
     <div class="form-group">
       <label>Full Name</label>
       <input class="input" id="signUpName" type="text" placeholder="Your full name" autocomplete="name">
@@ -269,16 +265,20 @@ tr:hover{background:rgba(255,213,0,.18)}
       <input class="input" id="signUpEmail" type="email" placeholder="you@example.com" autocomplete="email">
     </div>
     <div class="form-group">
-      <label>Password <span style="font-size:11px;color:var(--text-secondary)">(min 6 characters)</span></label>
+      <label>Password <span style="font-size:11px;color:var(--text-secondary)">(min 12 characters)</span></label>
       <input class="input" id="signUpPassword" type="password" placeholder="Create a password" autocomplete="new-password">
     </div>
     <div class="form-group">
       <label>Confirm Password</label>
       <input class="input" id="signUpConfirm" type="password" placeholder="Re-enter password" autocomplete="new-password">
     </div>
-    <button class="btn btn-primary" style="width:100%;padding:12px" onclick="handleEmailSignUp()">Create Account</button>
+    <div class="form-group">
+      <label>Private Admin Setup Key</label>
+      <input class="input" id="signUpAdminKey" type="password" placeholder="Enter the key supplied to Nyilora" autocomplete="off">
+    </div>
+    <button class="btn btn-primary" style="width:100%;padding:12px" onclick="handleEmailSignUp()">Create First Administrator</button>
     <p style="margin-top:10px;font-size:12px;color:var(--text-secondary)">
-      A confirmation link will be sent to your email address.
+      This setup can be completed once. Keep the setup key private.
     </p>
   </div>
 
@@ -1396,50 +1396,45 @@ async function handleEmailSignUp(){
   const email=$('#signUpEmail').value.trim();
   const pwd=$('#signUpPassword').value;
   const confirm=$('#signUpConfirm').value;
+  const adminKey=$('#signUpAdminKey').value.trim();
   if(!name)return toast('Enter your full name','warning');
   if(!email)return toast('Enter your email address','warning');
-  if(!pwd||pwd.length<6)return toast('Password must be at least 6 characters','warning');
+  if(!pwd||pwd.length<12)return toast('Password must be at least 12 characters','warning');
   if(pwd!==confirm)return toast('Passwords do not match','warning');
+  if(!adminKey)return toast('Enter the private admin setup key','warning');
 
   const btn=document.querySelector('#panelSignUp .btn-primary');
-  if(btn){btn.disabled=true;btn.textContent='Creating account...';}
+  if(btn){btn.disabled=true;btn.textContent='Creating administrator...';}
 
   try{
-    const{data,error}=await supabaseClient.auth.signUp({
-      email,password:pwd,
-      options:{
-        data:{full_name:name}
-      }
+    const{data,error}=await supabaseClient.functions.invoke('nyilora-bootstrap-admin',{
+      body:{name,email,password:pwd,admin_key:adminKey}
     });
-    if(error)return toast(error.message,'error');
-
-    try{
-      const existing=await sb('loan_staff').select('id').ilike('email',email).limit(1);
-      if(!existing.data || existing.data.length === 0){
-        const newBizId = 'BIZ-' + crypto.randomUUID().split('-')[0].toUpperCase();
-        await sb('loan_staff').insert({
-          business_id: newBizId,
-          name,
-          email,
-          role:'admin',
-          is_active:true,
-          auth_user_id:data.user?.id||null
-        });
-      }
-    }catch(_){}
-
-    if(data.session){
-      toast('Account created! Welcome to Nyilora.','success');
-      await resolveUserRole(data.session.user, null, pwd);
-    } else {
-      const panels=['panelSignIn','panelSignUp','panelForgot'];
-      panels.forEach(p=>{const el=$('#'+p);if(el)el.style.display='none'});
-      $('#panelEmailSent').style.display='block';
-      $('#emailSentMsg').textContent=`We've sent a confirmation link to ${email}. Click the link to activate your account, then sign in.`;
+    if(error){
+      let message=error.message||'Administrator setup failed';
+      try{const details=await error.context?.json();if(details?.message)message=details.message}catch(_){}
+      throw new Error(message);
     }
-
+    if(!data?.ok)throw new Error(data?.message||'Administrator setup failed');
+    $('#signUpAdminKey').value='';
+    $('#signUpPassword').value='';
+    $('#signUpConfirm').value='';
+    $('#tabSignUp').style.display='none';
+    switchAuthTab('signin');
+    $('#loginEmail').value=email;
+    toast('First administrator created. Sign in with the password you chose.','success');
   }catch(e){toast(e.message,'error')}
-  finally{if(btn){btn.disabled=false;btn.textContent='Create Account';}}
+  finally{if(btn){btn.disabled=false;btn.textContent='Create First Administrator';}}
+}
+
+async function refreshAdminSetupAvailability(){
+  try{
+    const{data,error}=await supabaseClient.functions.invoke('nyilora-bootstrap-admin',{method:'GET'});
+    if(!error&&data?.ok&&data.available===false){
+      $('#tabSignUp').style.display='none';
+      if($('#panelSignUp').style.display!=='none')switchAuthTab('signin');
+    }
+  }catch(e){console.warn('Could not check administrator setup status',e)}
 }
 
 async function handleForgotPassword(){
@@ -1448,12 +1443,6 @@ async function handleForgotPassword(){
   const btn=document.querySelector('#panelForgot .btn-primary');
   if(btn){btn.disabled=true;btn.textContent='Sending...';}
   try{
-    // Check if email actually exists in our system before attempting reset
-    const { data: staffCheck } = await sb('loan_staff').select('id').ilike('email', email).limit(1);
-    if (!staffCheck || staffCheck.length === 0) {
-        throw new Error("This email is not registered in the system.");
-    }
-
     const{error}=await supabaseClient.auth.resetPasswordForEmail(email,{
       redirectTo: window.location.origin + window.location.pathname
     });
@@ -8307,6 +8296,7 @@ document.addEventListener('keydown',e=>{
 (async()=>{
   setupMobileProtections();
   keepSupabaseAlive();
+  refreshAdminSetupAvailability();
   const loggedIn=await checkAuthSession();
   if(loggedIn){
     await applyRolloverPenalties();
