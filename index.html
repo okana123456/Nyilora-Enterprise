@@ -2951,7 +2951,7 @@ let appPage=1;
 async function renderApplications(page=1){
   appPage=page;const main=$('#mainContent');
   try{
-    let query=sb('loan_applications').select('*,loan_clients(full_name,phone,id_number)').eq('business_id', currentUser.business_id).order('created_at',{ascending:false});
+    let query=sb('loan_applications').select('*,loan_clients:loan_clients!loan_applications_client_id_fkey(full_name,phone,id_number)').eq('business_id', currentUser.business_id).order('created_at',{ascending:false});
     if(selectedBranchId)query=query.eq('branch_id',selectedBranchId);
     const{data:apps}=await query;
     cachedData.applications=apps||[];
@@ -3253,7 +3253,7 @@ async function rejectApp(id){
 async function renderDisbursement(){
   const main=$('#mainContent');
   try{
-    let appsQuery=sb('loan_applications').select('*,loan_clients(full_name,phone)').eq('business_id', currentUser.business_id).eq('status','approved').order('approved_at',{ascending:false});
+    let appsQuery=sb('loan_applications').select('*,loan_clients:loan_clients!loan_applications_client_id_fkey(full_name,phone)').eq('business_id', currentUser.business_id).eq('status','approved').order('approved_at',{ascending:false});
     let loansQuery=sb('loans').select('id,client_id,loan_no,outstanding_balance').eq('business_id',currentUser.business_id).eq('status','active').gt('outstanding_balance',0.01);
     if(selectedBranchId){appsQuery=appsQuery.eq('branch_id',selectedBranchId);loansQuery=loansQuery.eq('branch_id',selectedBranchId)}
     const[{data:apps,error:appsError},{data:activeLoans,error:loansError}]=await Promise.all([appsQuery,loansQuery]);
@@ -3273,7 +3273,7 @@ async function renderDisbursement(){
 }
 
 async function openDisburseModal(appId){
-  const{data:app,error:appError}=await sb('loan_applications').select('*,loan_clients(full_name,phone)').eq('id',appId).single();
+  const{data:app,error:appError}=await sb('loan_applications').select('*,loan_clients:loan_clients!loan_applications_client_id_fkey(full_name,phone)').eq('id',appId).single();
   if(appError)return toast(appError.message,'error');
   if(!app)return toast('Application not found','error');
   const amt=app.applied_amount;
@@ -3587,7 +3587,7 @@ function penaltyRecordHtml(records){
     </tbody></table></div>`;
 }
 async function viewLoan(id){
-  const{data:loan}=await sb('loans').select('*,loan_clients(full_name,phone)').eq('id',id).single();
+  const{data:loan}=await sb('loans').select('*,loan_clients:loan_clients!loans_client_id_fkey(full_name,phone)').eq('id',id).single();
   const{data:schedules}=await sb('loan_schedules').select('*').eq('loan_id',id).order('installment_no');
   const{data:payments}=await sb('loan_repayments').select('*').eq('loan_id',id).order('payment_date',{ascending:true}).order('created_at',{ascending:true});
   const{data:loanPenalties,error:penaltyError}=await readLoanPenaltyRecords(id);
@@ -3674,7 +3674,7 @@ function showLoanTab(tab,el){
 }
 
 async function openEditLoanModal(id){
-  const{data:loan}=await sb('loans').select('*,loan_clients(full_name)').eq('id',id).single();
+  const{data:loan}=await sb('loans').select('*,loan_clients:loan_clients!loans_client_id_fkey(full_name)').eq('id',id).single();
   if(!loan)return;
   openModal(`
     <h2>✏️ Edit Loan — ${loan.loan_no}</h2>
@@ -3824,7 +3824,7 @@ function buildLoanStatementTimeline(repayments,penalties,currentBalance){
 }
 
 async function viewClientPayments(loanId){
-  const{data:loan}=await sb('loans').select('*,loan_clients(full_name,phone)').eq('id',loanId).single();
+  const{data:loan}=await sb('loans').select('*,loan_clients:loan_clients!loans_client_id_fkey(full_name,phone)').eq('id',loanId).single();
   if(!loan) return toast('Loan not found','error');
 
   const[{data:payments},{data:penalties,error:penaltyError}]=await Promise.all([
@@ -3919,7 +3919,7 @@ async function viewClientPayments(loanId){
 async function downloadPaymentStatementPdf(loanId){
   try{
     const{data:loan,error:loanError}=await sb('loans')
-      .select('*,loan_clients(full_name,phone,id_number)')
+      .select('*,loan_clients:loan_clients!loans_client_id_fkey(full_name,phone,id_number)')
       .eq('id',loanId).single();
     if(loanError) throw loanError;
     const[{data:payments,error:paymentError},{data:penalties,error:penaltyError}]=await Promise.all([
@@ -4326,7 +4326,7 @@ async function openPaymentModal(loanId){
   window._payLoanCache=null;
   let loanInfo='';
   if(loanId){
-    const{data:loan}=await sb('loans').select('*,loan_clients(full_name,phone)').eq('id',loanId).single();
+    const{data:loan}=await sb('loans').select('*,loan_clients:loan_clients!loans_client_id_fkey(full_name,phone)').eq('id',loanId).single();
     if(loan)loanInfo=`<div class="card" style="margin-bottom:16px;font-size:13px;background:rgba(59,130,246,0.08);border-color:rgba(59,130,246,0.3)"><div style="font-size:15px;font-weight:700;margin-bottom:4px">👤 ${loan.loan_clients?.full_name||'Unknown Client'} &nbsp;<span style="font-size:12px;color:var(--text-secondary)">${loan.loan_clients?.phone||''}</span></div><strong>${loan.loan_no}</strong> | Balance: ${fmtMoney(loan.outstanding_balance)} | Arrears: ${fmtMoney(loan.arrears_amount)}</div>`;
   }
   openModal(`
@@ -4352,7 +4352,7 @@ async function searchLoanForPay(q){
   if(!window._payLoanCache){
     try{
       const{data}=await sb('loans')
-        .select('id,loan_no,outstanding_balance,status,client_id,loan_clients(full_name,phone,id_number)')
+        .select('id,loan_no,outstanding_balance,status,client_id,loan_clients:loan_clients!loans_client_id_fkey(full_name,phone,id_number)')
         .eq('business_id', currentUser.business_id)
         .eq('status','active')
         .gt('outstanding_balance', 0)
@@ -4663,7 +4663,7 @@ async function savePayment(){
 }
 
 async function printReceipt(id){
-  const{data:rep}=await sb('loan_repayments').select('*,loans(outstanding_balance)').eq('id',id).single();
+  const{data:rep}=await sb('loan_repayments').select('*,loans:loans!loan_repayments_loan_id_fkey(outstanding_balance)').eq('id',id).single();
   if(!rep)return;
   const{data:loanPayments}=await sb('loan_repayments').select('id,loan_id,amount,payment_date,created_at').eq('loan_id',rep.loan_id);
   const balanceAfter=buildRepaymentBalanceMap(loanPayments||[],{[rep.loan_id]:Number(rep.loans?.outstanding_balance||0)})[rep.id];
@@ -5347,7 +5347,7 @@ async function loadReportData(id){
   if(id==='collection_daily'){
     const todayStr=today();
     const[{data:reps},{data:scheds},{data:staffList}]=await Promise.all([
-      branchScoped('loan_repayments','*,loans(loan_no,loan_officer_id,loan_clients(full_name))').eq('payment_date',todayStr),
+      branchScoped('loan_repayments','*,loans:loans!loan_repayments_loan_id_fkey(loan_no,loan_officer_id,loan_clients:loan_clients!loans_client_id_fkey(full_name))').eq('payment_date',todayStr),
       branchScoped('loan_schedules','*').eq('due_date',todayStr),
       sb('loan_staff').select('id,name').eq('business_id',NYILORA_BUSINESS_ID)
     ]);
@@ -5366,7 +5366,7 @@ async function loadReportData(id){
   if(id==='collection_monthly'){
     const nowM=localISODate().slice(0,7);
     const[{data:reps},{data:scheds},{data:staffList}]=await Promise.all([
-      branchScoped('loan_repayments','*,loans(loan_no,loan_officer_id,loan_clients(full_name))').gte('payment_date',nowM+'-01'),
+      branchScoped('loan_repayments','*,loans:loans!loan_repayments_loan_id_fkey(loan_no,loan_officer_id,loan_clients:loan_clients!loans_client_id_fkey(full_name))').gte('payment_date',nowM+'-01'),
       branchScoped('loan_schedules','*').gte('due_date',nowM+'-01').lt('due_date',(()=>{const d=parseLocalDate(nowM+'-01');d.setMonth(d.getMonth()+1);return localISODate(d)})()),
       sb('loan_staff').select('id,name').eq('business_id',NYILORA_BUSINESS_ID)
     ]);
@@ -5384,7 +5384,7 @@ async function loadReportData(id){
   }
   if(id==='mpesa_payments'){
     const[{data:reps},{data:staffList}]=await Promise.all([
-      branchScoped('loan_repayments','*,loans(loan_no,loan_officer_id,loan_clients(full_name))').eq('payment_method','mpesa').order('payment_date',{ascending:false}),
+      branchScoped('loan_repayments','*,loans:loans!loan_repayments_loan_id_fkey(loan_no,loan_officer_id,loan_clients:loan_clients!loans_client_id_fkey(full_name))').eq('payment_method','mpesa').order('payment_date',{ascending:false}),
       sb('loan_staff').select('id,name').eq('business_id',NYILORA_BUSINESS_ID)
     ]);
     const staffMap={};(staffList||[]).forEach(s=>{staffMap[s.id]=s.name;});
@@ -5397,7 +5397,7 @@ async function loadReportData(id){
   }
   if(id==='repayment_perf'){
     const[{data:reps},{data:staffList}]=await Promise.all([
-      branchScoped('loan_repayments','*,loans(loan_no,loan_officer_id,loan_clients(full_name))').order('payment_date',{ascending:false}),
+      branchScoped('loan_repayments','*,loans:loans!loan_repayments_loan_id_fkey(loan_no,loan_officer_id,loan_clients:loan_clients!loans_client_id_fkey(full_name))').order('payment_date',{ascending:false}),
       sb('loan_staff').select('id,name').eq('business_id',NYILORA_BUSINESS_ID)
     ]);
     const staffMap={};(staffList||[]).forEach(s=>{staffMap[s.id]=s.name;});
@@ -5412,7 +5412,7 @@ async function loadReportData(id){
   }
   if(id==='portfolio'){
     const[{data:loans},{data:staff}]=await Promise.all([
-      branchScoped('loans','*,loan_clients(full_name,phone,id_number,address),loan_staff(name)').order('created_at',{ascending:false}),
+      branchScoped('loans','*,loan_clients:loan_clients!loans_client_id_fkey(full_name,phone,id_number,address),loan_staff:loan_staff!loans_loan_officer_id_fkey(name)').order('created_at',{ascending:false}),
       sb('loan_staff').select('id,name').eq('business_id',NYILORA_BUSINESS_ID)
     ]);
     const staffMap={};(staff||[]).forEach(s=>{staffMap[s.id]=s.name;});
@@ -5449,7 +5449,7 @@ async function loadReportData(id){
   }
   if(id==='disbursement'){
     const[{data:loans},{data:staff}]=await Promise.all([
-      branchScoped('loans','*,loan_clients(full_name,phone,id_number,address)').order('disbursement_date',{ascending:false}),
+      branchScoped('loans','*,loan_clients:loan_clients!loans_client_id_fkey(full_name,phone,id_number,address)').order('disbursement_date',{ascending:false}),
       sb('loan_staff').select('id,name').eq('business_id',NYILORA_BUSINESS_ID)
     ]);
     const staffMap={};(staff||[]).forEach(s=>{staffMap[s.id]=s.name;});
@@ -5485,7 +5485,7 @@ async function loadReportData(id){
   }
   if(id==='aging'){
     const[{data:loans},{data:staff}]=await Promise.all([
-      branchScoped('loans','*,loan_clients(full_name,phone,id_number,address)').eq('status','active'),
+      branchScoped('loans','*,loan_clients:loan_clients!loans_client_id_fkey(full_name,phone,id_number,address)').eq('status','active'),
       sb('loan_staff').select('id,name').eq('business_id',NYILORA_BUSINESS_ID)
     ]);
     const staffMap={};(staff||[]).forEach(s=>{staffMap[s.id]=s.name;});
@@ -5517,9 +5517,9 @@ async function loadReportData(id){
   }
   if(id==='income'){
     const[{data:reps},{data:clients},{data:feeLoans}]=await Promise.all([
-      branchScoped('loan_repayments','*,loans(principal_amount,total_interest,total_payable,loan_no)'),
+      branchScoped('loan_repayments','*,loans:loans!loan_repayments_loan_id_fkey(principal_amount,total_interest,total_payable,loan_no)'),
       branchScoped('loan_clients','id,full_name,created_at,notes'),
-      branchScoped('loans','id,principal_amount,total_interest,total_payable,processing_fee,disbursement_date,loan_no,loan_clients(full_name)')
+      branchScoped('loans','id,principal_amount,total_interest,total_payable,processing_fee,disbursement_date,loan_no,loan_clients:loan_clients!loans_client_id_fkey(full_name)')
     ]);
     // For repayments missing interest_portion, derive it from the loan's interest ratio
     const calcInterestPortion=(r)=>{
@@ -5559,7 +5559,7 @@ async function loadReportData(id){
   }
   if(id==='portfolio_summary'){
     const[{data:loans},{data:clients}]=await Promise.all([
-      branchScoped('loans','*,loan_clients(full_name)').eq('status','active'),
+      branchScoped('loans','*,loan_clients:loan_clients!loans_client_id_fkey(full_name)').eq('status','active'),
       branchScoped('loan_clients','*')
     ]);
     const withArrears=(loans||[]).filter(l=>Number(l.arrears_amount||0)>0);
@@ -5897,9 +5897,9 @@ async function renderExcessCharges(){
   try{
     const biz=currentUser.business_id;
     const [excessRes,chargesRes,allocRes]=await Promise.all([
-      branchScoped('nyilora_excess_ledger','*,loan_clients(full_name,phone),loans(loan_no)').order('created_at',{ascending:false}).limit(2000),
-      branchScoped('nyilora_charges','*,loan_clients(full_name,phone),loans(loan_no)').order('charge_date',{ascending:false}).limit(2000),
-      branchScoped('nyilora_excess_allocations','*,nyilora_excess_ledger(loan_clients(full_name)),nyilora_charges(description)').order('created_at',{ascending:false}).limit(250)
+      branchScoped('nyilora_excess_ledger','*,loan_clients:loan_clients!nyilora_excess_ledger_client_id_fkey(full_name,phone),loans:loans!nyilora_excess_ledger_loan_id_fkey(loan_no)').order('created_at',{ascending:false}).limit(2000),
+      branchScoped('nyilora_charges','*,loan_clients:loan_clients!nyilora_charges_client_id_fkey(full_name,phone),loans:loans!nyilora_charges_loan_id_fkey(loan_no)').order('charge_date',{ascending:false}).limit(2000),
+      branchScoped('nyilora_excess_allocations','*,nyilora_excess_ledger:nyilora_excess_ledger!nyilora_excess_allocations_excess_id_fkey(loan_clients:loan_clients!nyilora_excess_ledger_client_id_fkey(full_name)),nyilora_charges:nyilora_charges!nyilora_excess_allocations_charge_id_fkey(description)').order('created_at',{ascending:false}).limit(250)
     ]);
     if(excessRes.error||chargesRes.error||allocRes.error){
       const err=excessRes.error||chargesRes.error||allocRes.error;
@@ -6272,7 +6272,7 @@ async function dismissManualSuspense(entryId){
 async function openSuspenseMatchModal(entryId, entryType, amount, ref, suggestedLoanId=''){
   if(!requireSuspenseManage())return;
   const{data:loans}=await sb('loans')
-    .select('id,loan_no,client_id,outstanding_balance,registration_fee_due,registration_fee_paid,processing_fee,processing_fee_paid,loan_clients(full_name,phone,id_number)')
+    .select('id,loan_no,client_id,outstanding_balance,registration_fee_due,registration_fee_paid,processing_fee,processing_fee_paid,loan_clients:loan_clients!loans_client_id_fkey(full_name,phone,id_number)')
     .eq('business_id',currentUser.business_id).eq('status','active').gt('outstanding_balance',0)
     .order('created_at',{ascending:false}).limit(500);
 
@@ -7032,7 +7032,7 @@ async function renderAccountingLegacy() {
       fetchPagedBusinessRows('loans', q=>q.gte('disbursement_date',qFetchStart).lte('disbursement_date',qEnd),
         'id,client_id,loan_officer_id,processing_fee,disbursed_amount,principal_amount,total_interest,total_payable,disbursement_date,status'),
       fetchPagedBusinessRows('loan_repayments', q=>q.gte('payment_date',qFetchStart).lte('payment_date',qEndFull),
-        'id,loan_id,amount,loan_portion,interest_portion,penalty_portion,payment_method,payment_date,created_at,loans(id,client_id,loan_officer_id,total_interest,total_payable,status)'),
+        'id,loan_id,amount,loan_portion,interest_portion,penalty_portion,payment_method,payment_date,created_at,loans:loans!loan_repayments_loan_id_fkey(id,client_id,loan_officer_id,total_interest,total_payable,status)'),
       fetchPagedBusinessRows('loan_clients', q=>q.gte('created_at',`${qFetchStart}T00:00:00+00:00`).lte('created_at',qEndFull),
         'id,loan_officer_id,notes,created_at'),
       fetchPagedBusinessRows('loan_staff', q=>q.order('name'), 'id,name,role,is_active'),
@@ -7256,7 +7256,7 @@ async function toggleBranch(id,active){const{error}=await sb('nyilora_branches')
 
 async function renderExpenses(){
   const main=$('#mainContent');if(!hasPermission('view_expenses')&&!hasRole('branch_manager','admin','cashier'))return toast('Expense access required','warning');
-  let q=sb('nyilora_expenses').select('*,nyilora_branches(name),loan_staff!nyilora_expenses_initiated_by_fkey(name)').eq('business_id',currentUser.business_id).order('expense_date',{ascending:false});if(selectedBranchId)q=q.eq('branch_id',selectedBranchId);const{data,error}=await q;if(error){toast(error.message,'error');return}
+  let q=sb('nyilora_expenses').select('*,nyilora_branches:nyilora_branches!nyilora_expenses_branch_id_fkey(name),loan_staff!nyilora_expenses_initiated_by_fkey(name)').eq('business_id',currentUser.business_id).order('expense_date',{ascending:false});if(selectedBranchId)q=q.eq('branch_id',selectedBranchId);const{data,error}=await q;if(error){toast(error.message,'error');return}
   const rows=data||[],approved=rows.filter(x=>x.status==='approved'),pending=rows.filter(x=>x.status==='pending');
   main.innerHTML=`<div class="page-header"><div><h1>Expenses</h1><p style="color:var(--text-secondary)">${selectedBranchId?escapeHtml(branchName(selectedBranchId)):'All Branches'}</p></div>${hasPermission('initiate_expenses')||hasRole('branch_manager')?'<button class="btn btn-primary" onclick="openExpenseModal()">+ New Expense</button>':''}</div><div class="kpi-grid"><div class="kpi-card"><div class="kpi-label">Approved Expenses</div><div class="kpi-value">${fmtMoney(approved.reduce((s,x)=>s+Number(x.amount),0))}</div></div><div class="kpi-card"><div class="kpi-label">Pending Approval</div><div class="kpi-value">${pending.length}</div></div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>Branch</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows.map(e=>`<tr><td>${fmtDate(e.expense_date)}</td><td>${escapeHtml(e.expense_no)}</td><td>${escapeHtml(e.nyilora_branches?.name||branchName(e.branch_id))}</td><td>${escapeHtml(e.custom_category||e.category)}</td><td>${escapeHtml(e.description)}</td><td><strong>${fmtMoney(e.amount)}</strong></td><td>${statusBadge(e.status)}</td><td><details style="position:relative"><summary class="btn btn-outline btn-sm">⋮</summary><div class="card" style="position:absolute;right:0;z-index:5;min-width:130px;padding:6px"><button class="btn btn-outline btn-sm" onclick='viewExpense(${JSON.stringify(e).replace(/'/g,"&#39;")})'>View</button> ${['draft','pending'].includes(e.status)?`<button class="btn btn-outline btn-sm" onclick='openExpenseModal(${JSON.stringify(e).replace(/'/g,"&#39;")})'>Edit</button>`:''} ${e.status==='pending'&&(hasPermission('approve_expenses')||hasRole('branch_manager'))?`<button class="btn btn-success btn-sm" onclick="decideExpense('${e.id}','approve')">Approve</button><button class="btn btn-danger btn-sm" onclick="decideExpense('${e.id}','reject')">Reject</button>`:''} ${['draft','pending','rejected'].includes(e.status)?`<button class="btn btn-danger btn-sm" onclick="deleteExpense('${e.id}')">Delete</button>`:''}</div></details></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center">No expenses</td></tr>'}</tbody></table></div>`;
 }

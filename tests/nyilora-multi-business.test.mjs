@@ -118,6 +118,14 @@ try {
   const verification = await db.exec(fs.readFileSync('NYILORA-MULTI-BUSINESS-VERIFY.sql','utf8'));
   assert(verification.at(-1).rows.every(row => Number(row.failures)===0),
     'verification query must report no tenant mismatches');
+  const frontend=fs.readFileSync('index.html','utf8');
+  const embeddedForeignKeys=[...new Set([...frontend.matchAll(/!([a-z][a-z0-9_]*_fkey)\(/g)]
+    .map(match=>match[1]))];
+  const foreignKeys=await db.query(`select conname from pg_constraint where contype='f'`);
+  const installedForeignKeys=new Set(foreignKeys.rows.map(row=>row.conname));
+  for(const name of embeddedForeignKeys){
+    assert(installedForeignKeys.has(name),`Embedded relationship ${name} must exist`);
+  }
   console.log('PASS: multi-business migration and new administrator isolation');
 } finally {
   await db.close();
