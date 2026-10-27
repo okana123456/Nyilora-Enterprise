@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
-const BUSINESS_ID = "BIZ-NYILORA";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
@@ -24,34 +23,27 @@ serve(async (req) => {
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-  const configuredBusiness = Deno.env.get("NYILORA_BUSINESS_ID")?.trim();
   const token = /^Bearer (.+)$/i.exec(req.headers.get("authorization") || "")?.[1];
   if (!supabaseUrl || !serviceKey) return json({ ok: false, message: "Supabase secrets are missing." }, 500);
-  if (configuredBusiness && configuredBusiness !== BUSINESS_ID) return json({ ok: false, message: "Nyilora business configuration is incorrect." }, 500);
   if (!token) return json({ ok: false, message: "Sign in again before creating staff." }, 401);
 
   const admin = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
   let createdAuthId: string | null = null;
   let createdStaffId: string | null = null;
+  let businessId: string | null = null;
 
   try {
     const { data: { user }, error: userError } = await admin.auth.getUser(token);
     if (userError || !user) return json({ ok: false, message: "Your login session has expired. Sign in again." }, 401);
 
-    let { data: actor, error: actorError } = await admin.from("loan_staff")
+    const { data: actor, error: actorError } = await admin.from("loan_staff")
       .select("id, business_id, role, is_active")
-      .eq("business_id", BUSINESS_ID).eq("auth_user_id", user.id).maybeSingle();
+      .eq("auth_user_id", user.id).maybeSingle();
     if (actorError) throw actorError;
-    if (!actor && user.email) {
-      const fallback = await admin.from("loan_staff")
-        .select("id, business_id, role, is_active, auth_user_id")
-        .eq("business_id", BUSINESS_ID).ilike("email", user.email).maybeSingle();
-      if (fallback.error) throw fallback.error;
-      if (!fallback.data?.auth_user_id) actor = fallback.data;
-    }
     if (!actor?.is_active || !String(actor.role || "").split(",").map((r: string) => r.trim()).includes("admin")) {
       return json({ ok: false, message: "Only an active Nyilora administrator can create staff." }, 403);
     }
+    businessId = actor.business_id;
 
     const body = await req.json();
     const name = String(body.name || "").trim();
@@ -66,12 +58,12 @@ serve(async (req) => {
     }
 
     const { data: branch, error: branchError } = await admin.from("nyilora_branches")
-      .select("id").eq("id", branchId).eq("business_id", BUSINESS_ID).eq("is_active", true).maybeSingle();
+      .select("id").eq("id", branchId).eq("business_id", businessId).eq("is_active", true).maybeSingle();
     if (branchError) throw branchError;
     if (!branch) return json({ ok: false, message: "Choose an active Nyilora branch." }, 400);
 
     const { data: existingStaff, error: existingError } = await admin.from("loan_staff")
-      .select("id").eq("business_id", BUSINESS_ID).ilike("email", email).limit(1);
+      .select("id").eq("business_id", businessId).ilike("email", email).limit(1);
     if (existingError) throw existingError;
     if (existingStaff?.length) return json({ ok: false, message: "This email already has a Nyilora staff record. Edit that record or send a password reset link." }, 409);
 
@@ -90,14 +82,14 @@ serve(async (req) => {
     createdAuthId = authData.user.id;
 
     const { data: staff, error: staffError } = await admin.from("loan_staff").insert({
-      business_id: BUSINESS_ID, auth_user_id: createdAuthId, name, email, phone,
+      business_id: businessId, auth_user_id: createdAuthId, name, email, phone,
       role: selectedRoles.join(","), is_active: body.is_active !== false, branch_id: branch.id,
     }).select("id").single();
     if (staffError) throw staffError;
     createdStaffId = staff.id;
 
     const permissions: Record<string, unknown> = {
-      staff_id: staff.id, business_id: BUSINESS_ID, branch_id: branch.id,
+      staff_id: staff.id, business_id: businessId, branch_id: branch.id,
       updated_by: actor.id, updated_at: new Date().toISOString(),
     };
     for (const key of permissionNames) permissions[key] = body.permissions?.[key] === true;
@@ -109,7 +101,7 @@ serve(async (req) => {
     // A failed staff insert must not leave a new login that cannot sign in.
     let cleanupError: string | null = null;
     if (createdStaffId) {
-      const removed = await admin.from("loan_staff").delete().eq("id", createdStaffId).eq("business_id", BUSINESS_ID);
+      const removed = await admin.from("loan_staff").delete().eq("id", createdStaffId).eq("business_id", businessId);
       if (removed.error) cleanupError = `Staff rollback failed: ${removed.error.message}`;
     }
     if (createdAuthId && !cleanupError) {

@@ -1,5 +1,4 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-const NYILORA_BUSINESS_ID = Deno.env.get('NYILORA_BUSINESS_ID')?.trim() || '';
 
 function callbackResponse() {
   return new Response(JSON.stringify({ ResultCode: 0, ResultDesc: "Accepted" }), {
@@ -23,7 +22,7 @@ function nextPaidUntil(billingMonth: string) {
 }
 
 function billingAmount(month: string, businessId: string) {
-  return businessId === NYILORA_BUSINESS_ID && String(month).slice(0, 10) >= "2026-12-01" ? 3000 : 0;
+  return businessId && String(month).slice(0, 10) >= "2026-12-01" ? 3000 : 0;
 }
 
 function metaValue(items: Array<{ Name?: string; Value?: unknown }>, name: string) {

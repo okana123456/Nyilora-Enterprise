@@ -1,41 +1,21 @@
 # Nyilora Enterprise
 
-This repository is the separate Nyilora Enterprise loan system. It was cloned from the empty [Nyilora-Enterprise](https://github.com/okana123456/Nyilora-Enterprise) repository and prepared with the Bripta feature layout, a green theme, and Nyilora names. It contains no Bripta clients, payments, credentials, callback URL, or Git history.
+Nyilora is a green lending system with the same functional areas as Bripta. This repository and Supabase project `sedzaagjqfsoxglcwyed` are separate from Bripta. The website can host multiple businesses. Each business has one editable Head Office branch, its own administrators and invited staff, and its own lending, accounting, payments, SMS and billing records.
 
-## Agreed setup
+## Install the multi-business update
 
-- One branch, editable by administrators. The Branches tab remains available for viewing and editing that branch.
-- Monthly subscription: KES 3,000 starting **1 December 2026**. The server payment functions reject earlier subscription requests.
-- SMS credits: KES 0.55 each. Nyilora will supply its own SMS provider API and approved sender ID.
-- Nyilora will supply its own M-Pesa Paybill and Daraja credentials. Callback URLs are built from Nyilora's Supabase project URL.
+1. In **Nyilora's** Supabase SQL Editor, run [NYILORA-MULTI-BUSINESS-ONE-RUN.sql](NYILORA-MULTI-BUSINESS-ONE-RUN.sql). It contains migrations 0027–0031 in order. It adds tenant isolation and does not recalculate existing financial amounts. The original empty `BIZ-NYILORA` account is reserved for the first signup; later signups receive new IDs.
+2. Deploy the changed Edge Functions from `supabase/functions/`: `nyilora-bootstrap-admin`, `nyilora-create-staff`, `payment-callback`, `send-repayment-sms`, `start-service-payment`, `service-payment-callback`, `start-sms-bundle-payment`, `sms-bundle-payment-callback`.
+3. Keep `NYILORA_ADMIN_SETUP_KEY` set privately in this Supabase project's Edge Function secrets. It must be at least 32 characters. Do not put it in Git or the frontend. The setup key authorizes creation of each company administrator. Only existing administrators can invite staff into their own company.
+4. Commit and publish the website changes, then register a first business on **Sign Up** using its business name and setup key. Sign in with the new credentials. Additional businesses use the same signup form and key, receiving separate business IDs and records.
+5. Run [NYILORA-MULTI-BUSINESS-VERIFY.sql](NYILORA-MULTI-BUSINESS-VERIFY.sql). Every failure count should be zero. Test an administrator and staff login for each business and confirm that one cannot see the other's data.
 
-## Current status
+## Payments and messaging
 
-The interface, reporting helpers, document and financial statement helpers, and Edge Function source templates are in place. The frontend is pointed at the Nyilora Supabase project using its public anon key and confirmed business ID `BIZ-NYILORA`. Nothing is connected to Bripta.
+Each business enters its own unique M-Pesa Paybill in Settings. The callback uses that Paybill to identify the business; payments with unknown or ambiguous Paybills go into the service-only `nyilora_unrouted_callbacks` table for review. Do not enable a business's live callback until its Paybill and loan repayment test have been verified. The callback URL belongs to this Nyilora Supabase project only.
 
-The user has run `NYILORA-FOUNDATION-ONE-RUN.sql`, migrations `0005` through `0019`, and `NYILORA-FINAL-ADDITIONS-ONE-RUN.sql` in the Nyilora project. The reported read-only checks show one branch, zero staff, ten required application functions, two asset write policies, and no financial or SMS records. The frontend loads private profile photos through short-lived signed URLs. The settings UI accepts only public Paybill details and directs private Daraja credentials to Edge Function secrets. Payment callbacks and SMS delivery require Nyilora's provider details and end-to-end tests before they can be enabled. This repository is suitable for an interface preview, not for live financial transactions yet.
+Each business needs its own approved sender ID and SMS provider configuration. The original `BIZ-NYILORA` uses `NYILORA_SMS_API_TOKEN`, `NYILORA_SMS_SEND_URL`, and `NYILORA_SMS_SENDER_ID`. For a new ID such as `BIZ-ABC123`, use `NYILORA_SMS_API_TOKEN__ABC123`, `NYILORA_SMS_SEND_URL__ABC123`, and `NYILORA_SMS_SENDER_ID__ABC123` as secrets in the **Nyilora** Supabase project. Other existing payment provider secrets remain private in the same project. SMS credits cost KES 0.55 each. Subscription billing starts in December 2026 at KES 3,000 per business each month.
 
-## First administrator setup
+## Local checks
 
-The public Sign Up flow has been replaced with a one-time first-admin setup form. Run `supabase/migrations/0026_nyilora_first_admin_gate.sql` in the **Nyilora** SQL Editor, then check it with `NYILORA-ADMIN-SETUP-CHECK.sql`. Set `NYILORA_ADMIN_SETUP_KEY` in **Nyilora's Supabase Edge Function Secrets**, and deploy `supabase/functions/nyilora-bootstrap-admin/index.ts` as `nyilora-bootstrap-admin`. The key value is supplied privately to the owner and must never be placed in Git or `config.js`. The Edge Function creates a confirmed Auth user, then calls the database gate to create the only initial admin and grant its permissions. The database gate rejects a second first-admin claim even if two requests arrive together. Later staff accounts are created by an authenticated administrator through `nyilora-create-staff`. After the first administrator has signed in, disable public signups in Nyilora's Supabase Authentication settings and remove or rotate the setup key. The function's public status request hides the setup tab once staff exists.
-
-## Staff invitations
-
-Deploy `supabase/functions/nyilora-create-staff/index.ts` as the `nyilora-create-staff` Edge Function after updating the website. In Supabase Authentication URL Configuration, allow `https://nyilora-enterprise-v1.vercel.app/**` as a redirect URL and set the Site URL to the Nyilora website. Configure Supabase Auth email delivery for invitations. An administrator adds a staff member with a role and branch; Supabase sends an invitation to that email address. The recipient opens the invitation and chooses a password before signing in. The Staff page reads staff, permissions, and branch names separately to avoid ambiguous relationship errors. Deactivating staff preserves their historical loans and repayments.
-
-## Details needed to finish
-
-1. Nyilora will choose its initial administrator later. Use the private one-time setup key and first-admin form when ready.
-2. Nyilora Paybill/shortcode and Daraja credentials; enter credentials as **Supabase secrets**, never in `config.js` or Git.
-3. Nyilora SMS provider endpoint, token, approved sender ID, and payload specification; enter token as a Supabase secret.
-4. Test all roles and features against a disposable Nyilora test dataset. The reference app has legacy base tables plus many later changes, so its historical repair SQL must not be run on this fresh Nyilora project.
-
-## Deployment order after setup
-
-1. Install and verify Nyilora's clean database schema, RLS, storage bucket, single branch and staff accounts.
-2. Verify the public values in `config.js`. Put service-role, Daraja and SMS credentials in Nyilora's Supabase secrets.
-3. Review and deploy the seven functions in `supabase/functions` to **Nyilora's project only** after the payment and SMS provider setup is complete.
-4. Verify login, every role and tab, loan issuance, repayment and callback idempotency, suspense, accounting, documents, SMS, subscription boundaries, and branch isolation with test data.
-5. Connect hosting and register Nyilora callback URLs only after those checks pass.
-
-Do not copy production records or run Bripta's business-specific recovery SQL in Nyilora.
+The new database test loads the foundation and migrations into an isolated PostgreSQL runtime, reruns the update, creates two companies, and checks RLS, lending, expenses, accounting, callback suspense, SMS and billing isolation. The frontend and Edge Function files have also been syntax checked. These local tests do not replace a live payment callback, SMS provider, email invitation and role test in the Nyilora project.

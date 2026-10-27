@@ -16,6 +16,8 @@ assert.match(html,/Nyilora Enterprise/);
 assert.match(html,/Project setup is pending/);
 assert.match(html,/nyilora-create-staff/);
 assert.match(html,/functions\.invoke\('nyilora-bootstrap-admin'/);
+assert.match(html,/Create Business Account/);
+assert.match(html,/signUpCompanyName/);
 assert.doesNotMatch(html,/\.auth\.signUp\(/);
 assert.doesNotMatch(html,/\+ Add Branch/);
 const config=fs.readFileSync(path.join(root,'config.js'),'utf8');
@@ -27,5 +29,6 @@ assert.doesNotMatch(config,/service_role\s*:|serviceRole\s*:|consumerSecret\s*:/
 assert.doesNotMatch(config,/NYILORA_ADMIN_SETUP_KEY|adminSetupKey/i);
 const bootstrap=fs.readFileSync(path.join(root,'supabase/functions/nyilora-bootstrap-admin/index.ts'),'utf8');
 assert.match(bootstrap,/NYILORA_ADMIN_SETUP_KEY/);
-assert.match(bootstrap,/nyilora_claim_first_admin/);
-console.log('PASS: Nyilora branding, isolated configuration, one-branch UI, agreed prices and start date.');
+assert.match(bootstrap,/nyilora_register_business_admin/);
+assert.match(bootstrap,/company_name/);
+console.log('PASS: Nyilora branding, isolated configuration, multi-business signup, agreed prices and start date.');

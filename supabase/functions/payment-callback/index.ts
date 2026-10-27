@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
-const NYILORA_BUSINESS_ID = Deno.env.get('NYILORA_BUSINESS_ID')?.trim() || '';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -37,7 +36,7 @@ function subscriptionAccountRef(businessId: string) {
 }
 
 function subscriptionAmount(month: string, businessId: string) {
-  return businessId === NYILORA_BUSINESS_ID && String(month).slice(0, 10) >= "2026-12-01" ? 3000 : 0;
+  return businessId && String(month).slice(0, 10) >= "2026-12-01" ? 3000 : 0;
 }
 
 function compactAccount(value: unknown) {
@@ -104,9 +103,17 @@ serve(async (req) => {
     const configuredBusinesses = [...new Set((settingsRows || [])
       .map((row) => String(row.business_id || "").trim())
       .filter(Boolean))];
+    if (configuredBusinesses.length !== 1) {
+      const { error: unroutedError } = await supabase.from("nyilora_unrouted_callbacks").upsert({
+        trans_id: transId, shortcode, account_reference: accountNumber, amount,
+        raw_payload: body, reason: configuredBusinesses.length ? "ambiguous_paybill" : "unknown_paybill",
+      }, { onConflict: "trans_id" });
+      if (unroutedError) throw unroutedError;
+      return accepted;
+    }
     let businessId = configuredBusinesses.length === 1 ? configuredBusinesses[0] : null;
     let autoConfirm = configuredBusinesses.length === 1 && !!settingsRows?.[0]?.mpesa_auto_confirm;
-    if (businessId === NYILORA_BUSINESS_ID) {
+    if (businessId) {
       paymentDate = /^\d{14}$/.test(String(body?.TransTime || ""))
         ? `${paymentDate}+03:00`
         : new Date().toISOString();
@@ -123,7 +130,7 @@ serve(async (req) => {
       return accepted;
     }
 
-    const subscriptionCandidates = [...new Set([...configuredBusinesses, NYILORA_BUSINESS_ID])];
+    const subscriptionCandidates = configuredBusinesses;
     const subscriptionBusinessId = subscriptionCandidates.find((candidateBusiness) =>
       compactAccount(accountNumber) === compactAccount(subscriptionAccountRef(candidateBusiness))
     );
@@ -159,22 +166,12 @@ serve(async (req) => {
     if (accountDigits.length >= 5 && accountDigits.length <= 12) {
       const accountMatches: Array<{ id: string; business_id: string; full_name: string | null; account_credit?: number | null }> = [];
       for (const candidateBusiness of configuredBusinesses) {
-        if (candidateBusiness === NYILORA_BUSINESS_ID) {
-          const { data, error } = await supabase.rpc("nyilora_callback_phone_candidates", {
-            p_account_reference: accountNumber,
-            p_transaction_code: transId,
-          });
-          if (error) clientLookupError = error;
-          for (const row of data || []) accountMatches.push(row);
-          continue;
-        }
-        // Preserve the existing matching rule for other businesses.
-        const { data } = await supabase
-          .from("loan_clients")
-          .select("id, business_id, full_name, account_credit")
-          .eq("business_id", candidateBusiness)
-          .eq("id_number", accountDigits)
-          .limit(2);
+        const { data, error } = await supabase.rpc("nyilora_callback_phone_candidates", {
+          p_business_id: candidateBusiness,
+          p_account_reference: accountNumber,
+          p_transaction_code: transId,
+        });
+        if (error) clientLookupError = error;
         for (const row of data || []) accountMatches.push(row);
       }
       const uniqueMatches = [...new Map(accountMatches.map((row) => [row.id, row])).values()];
@@ -186,8 +183,15 @@ serve(async (req) => {
       autoConfirm = !!(settingsRows || []).find((row) => row.business_id === businessId)?.mpesa_auto_confirm;
     }
 
+    const { data: businessBranch, error: branchError } = businessId
+      ? await supabase.from("nyilora_branches").select("id")
+        .eq("business_id", businessId).eq("is_head_office", true).maybeSingle()
+      : { data: null, error: null };
+    if (branchError) throw branchError;
+    if (businessId && !businessBranch) throw new Error("Payment business has no Head Office branch");
+
     // Reuse saved callbacks on provider retries, including payments held for review.
-    const { data: previousQueue, error: previousQueueError } = businessId === NYILORA_BUSINESS_ID
+    const { data: previousQueue, error: previousQueueError } = businessId
       ? await supabase
         .from("mpesa_callback_queue")
         .select("id,confirmed")
@@ -208,6 +212,7 @@ serve(async (req) => {
         trans_time: body?.TransTime,
         trans_amount: amount,
         business_id: businessId,
+        branch_id: businessBranch?.id,
         business_short_code: shortcode,
         bill_ref_number: accountNumber,
         msisdn: payerPhone,
@@ -216,7 +221,7 @@ serve(async (req) => {
         last_name: body?.LastName || "",
         raw_payload: body,
         confirmed: false,
-        ...(businessId === NYILORA_BUSINESS_ID ? { dismissed: false } : {}),
+        dismissed: false,
       })
       .select("id")
       .maybeSingle();
@@ -253,6 +258,7 @@ serve(async (req) => {
           amount,
           account_number: accountNumber,
           business_id: businessId,
+          branch_id: businessBranch?.id,
           mpesa_reference: transId,
           payer_phone: payerPhone,
           payer_name: payerName,
@@ -320,6 +326,7 @@ serve(async (req) => {
           amount,
           account_number: accountNumber,
           business_id: businessId,
+          branch_id: businessBranch?.id,
           mpesa_reference: transId,
           payer_phone: payerPhone,
           payer_name: payerName,
@@ -363,6 +370,7 @@ serve(async (req) => {
       .insert({
         amount,
         business_id: businessId,
+        branch_id: businessBranch?.id,
         loan_id: loan.id,
         payment_method: "M-Pesa",
         payment_reference: transId,
@@ -378,7 +386,7 @@ serve(async (req) => {
         processing_fee_portion: processingFeePortion,
         loan_portion: loanPortion,
         credit_portion: creditPortion,
-        notes: `Auto-confirmed via Daraja C2B. Matched by ${businessId === NYILORA_BUSINESS_ID ? "borrower phone account" : "National ID account"}. Allocation: ${allocationNote || "none"}. Payer: ${payerName}`,
+        notes: `Auto-confirmed via Daraja C2B. Matched by borrower phone account. Allocation: ${allocationNote || "none"}. Payer: ${payerName}`,
       })
       .select("id")
       .single();

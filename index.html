@@ -232,7 +232,7 @@ tr:hover{background:rgba(255,213,0,.18)}
 <div id="authContainer">
   <div class="auth-tabs" style="margin-bottom:20px">
     <button class="auth-tab active" id="tabSignIn" onclick="switchAuthTab('signin')">Sign In</button>
-    <button class="auth-tab" id="tabSignUp" onclick="switchAuthTab('signup')">First Admin Setup</button>
+    <button class="auth-tab" id="tabSignUp" onclick="switchAuthTab('signup')">Sign Up</button>
   </div>
 
   <div id="panelSignIn">
@@ -257,7 +257,11 @@ tr:hover{background:rgba(255,213,0,.18)}
 
   <div id="panelSignUp" style="display:none">
     <div id="firstAdminSetupForm">
-    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px">Set up Nyilora's first administrator using the private setup key. Future staff accounts are added by that administrator.</p>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px">Create a separate business with its own records using the private admin setup key. Staff can be invited afterward.</p>
+    <div class="form-group">
+      <label>Business Name</label>
+      <input class="input" id="signUpCompanyName" type="text" placeholder="Your registered business name" autocomplete="organization">
+    </div>
     <div class="form-group">
       <label>Full Name</label>
       <input class="input" id="signUpName" type="text" placeholder="Your full name" autocomplete="name">
@@ -278,15 +282,10 @@ tr:hover{background:rgba(255,213,0,.18)}
       <label>Private Admin Setup Key</label>
       <input class="input" id="signUpAdminKey" type="password" placeholder="Enter the key supplied to Nyilora" autocomplete="off">
     </div>
-    <button class="btn btn-primary" style="width:100%;padding:12px" onclick="handleEmailSignUp()">Create First Administrator</button>
+    <button class="btn btn-primary" style="width:100%;padding:12px" onclick="handleEmailSignUp()">Create Business Account</button>
     <p style="margin-top:10px;font-size:12px;color:var(--text-secondary)">
-      This setup can be completed once. Keep the setup key private.
+      Each approved signup receives its own business account. Keep the setup key private.
     </p>
-    </div>
-    <div id="staffAccessInfo" style="display:none;text-align:left">
-      <h2 style="font-size:17px;margin-bottom:10px">Get staff access</h2>
-      <p style="font-size:13px;line-height:1.6;color:var(--text-secondary)">Ask a Nyilora administrator to add you from the Staff tab. You will receive an email invitation to confirm your address and set your password.</p>
-      <button class="btn btn-outline" style="width:100%;justify-content:center;margin-top:18px;padding:12px" onclick="switchAuthTab('signin')">Back to Sign In</button>
     </div>
   </div>
 
@@ -318,7 +317,7 @@ tr:hover{background:rgba(255,213,0,.18)}
 <div id="appShell">
 <aside class="sidebar" id="sidebar">
 <div class="sidebar-header">
-<h2>Nyilora Enterprise</h2>
+<h2 id="sidebarCompanyName">Nyilora Enterprise</h2>
 <span>Smart Lending. Clear Repayments.</span>
 <div id="branchContext"></div>
 </div>
@@ -418,7 +417,7 @@ const NYILORA_CACHE_VERSION = 6;
 // discover older rows that were absent from a user's earlier RLS snapshot.
 const NYILORA_PORTFOLIO_CACHE_REVISION = 7;
 const NYILORA_PORTFOLIO_TABLES = new Set(['loan_clients','loans','loan_schedules','loan_repayments','loan_staff']);
-const NYILORA_BUSINESS_ID = NYILORA_CONFIG.businessId;
+let NYILORA_BUSINESS_ID = NYILORA_CONFIG.businessId;
 const NYILORA_FULL_SYNC_MS = 90 * 24 * 60 * 60 * 1000;
 // Branch transfers can move existing rows without changing their updated_at.
 // Reconcile the small ownership tables regularly so an old branch cache cannot
@@ -1302,6 +1301,8 @@ async function loadSettings(){
         settings={company_name:'Nyilora',currency:'KES',default_grace_period:7,default_late_penalty_pct:5,default_processing_fee_pct:3,standard_weekly_rate:5,micro_weekly_rate:6.25,micro_threshold:4000,disbursement_method:'cash',mpesa_auto_confirm:false};
     }
     appSettings=settings;
+    const companyHeading=$('#sidebarCompanyName');
+    if(companyHeading) companyHeading.textContent=settings.company_name||'Nyilora Enterprise';
     return settings;
   }catch(e){
     console.error("Settings load error:", e);
@@ -1400,11 +1401,13 @@ async function handleEmailLogin(){
 }
 
 async function handleEmailSignUp(){
+  const companyName=$('#signUpCompanyName').value.trim();
   const name=$('#signUpName').value.trim();
   const email=$('#signUpEmail').value.trim();
   const pwd=$('#signUpPassword').value;
   const confirm=$('#signUpConfirm').value;
   const adminKey=$('#signUpAdminKey').value.trim();
+  if(!companyName)return toast('Enter your business name','warning');
   if(!name)return toast('Enter your full name','warning');
   if(!email)return toast('Enter your email address','warning');
   if(!pwd||pwd.length<12)return toast('Password must be at least 12 characters','warning');
@@ -1412,11 +1415,11 @@ async function handleEmailSignUp(){
   if(!adminKey)return toast('Enter the private admin setup key','warning');
 
   const btn=document.querySelector('#panelSignUp .btn-primary');
-  if(btn){btn.disabled=true;btn.textContent='Creating administrator...';}
+  if(btn){btn.disabled=true;btn.textContent='Creating business...';}
 
   try{
     const{data,error}=await supabaseClient.functions.invoke('nyilora-bootstrap-admin',{
-      body:{name,email,password:pwd,admin_key:adminKey}
+      body:{company_name:companyName,name,email,password:pwd,admin_key:adminKey}
     });
     if(error){
       let message=error.message||'Administrator setup failed';
@@ -1427,27 +1430,11 @@ async function handleEmailSignUp(){
     $('#signUpAdminKey').value='';
     $('#signUpPassword').value='';
     $('#signUpConfirm').value='';
-    showStaffAccessInfo();
     switchAuthTab('signin');
     $('#loginEmail').value=email;
-    toast('First administrator created. Sign in with the password you chose.','success');
+    toast('Business account created. Sign in with the password you chose.','success');
   }catch(e){toast(e.message,'error')}
-  finally{if(btn){btn.disabled=false;btn.textContent='Create First Administrator';}}
-}
-
-async function refreshAdminSetupAvailability(){
-  try{
-    const{data,error}=await supabaseClient.functions.invoke('nyilora-bootstrap-admin',{method:'GET'});
-    if(!error&&data?.ok&&data.available===false){
-      showStaffAccessInfo();
-    }
-  }catch(e){console.warn('Could not check administrator setup status',e)}
-}
-
-function showStaffAccessInfo(){
-  $('#tabSignUp').textContent='Get Access';
-  $('#firstAdminSetupForm').style.display='none';
-  $('#staffAccessInfo').style.display='block';
+  finally{if(btn){btn.disabled=false;btn.textContent='Create Business Account';}}
 }
 
 async function handleForgotPassword(){
@@ -1501,19 +1488,7 @@ async function resolveUserRole(authUser, staffCache = null, pwd = null){
             staff = staffData[0];
         }
 
-        // 2. If not found by ID, try to link by email (case-insensitive)
-        if(!staff && authUser.email){
-          const { data: byEmailData, error: staffEmailError } = await sb('loan_staff').select('*').ilike('email', authUser.email).limit(1);
-          if(staffEmailError) throw staffEmailError;
-          if(byEmailData && byEmailData.length > 0){
-            staff = byEmailData[0];
-            // Link their new auth ID to the pre-created staff record
-            const{error:linkError}=await supabaseClient.rpc('nyilora_link_current_staff');
-            if(linkError)throw linkError;
-          }
-        }
-
-        // 3. This installation accepts only pre-created Nyilora staff accounts.
+        // Only a staff row bound to this exact Auth user grants access.
         if(!staff){
           throw new Error('No active Nyilora staff account matches this login email.');
         }
@@ -1530,6 +1505,7 @@ async function resolveUserRole(authUser, staffCache = null, pwd = null){
     }
 
     currentUser=staff;
+    NYILORA_BUSINESS_ID=staff.business_id;
     localStorage.setItem('nyilora_current_user', JSON.stringify(staff));
 
     if (!staffCache) { 
@@ -1572,12 +1548,16 @@ async function checkAuthSession(){
   if (cachedUserStr && session?.user) {
       try {
           const cachedUser = JSON.parse(cachedUserStr);
-          const { data: freshStaff } = await sb('loan_staff')
+          if(cachedUser.auth_user_id!==session.user.id)throw new Error('Cached account belongs to another login');
+          const { data: freshStaff,error:freshStaffError } = await sb('loan_staff')
             .select('*')
-            .eq('email', session.user.email)
+            .eq('auth_user_id', session.user.id)
             .eq('is_active', true)
             .maybeSingle();
-          currentUser = freshStaff || cachedUser;
+          if(freshStaffError)throw freshStaffError;
+          if(!freshStaff)throw new Error('Staff access is no longer active');
+          currentUser = freshStaff;
+          NYILORA_BUSINESS_ID=currentUser.business_id;
           localStorage.setItem('nyilora_current_user', JSON.stringify(currentUser));
           touchSession();
           showApp();
@@ -1611,6 +1591,10 @@ async function handleLogout(){
   localStorage.removeItem('nyilora_offline_auth');
   try{ await supabaseClient.auth.signOut(); }catch(e){}
   currentUser=null;
+  NYILORA_BUSINESS_ID=NYILORA_CONFIG.businessId;
+  appSettings=null;
+  const companyHeading=$('#sidebarCompanyName');
+  if(companyHeading)companyHeading.textContent='Nyilora Enterprise';
   $('#appShell').style.display='none';$('#loginScreen').style.display='flex';
 }
 
@@ -8340,7 +8324,6 @@ document.addEventListener('keydown',e=>{
 (async()=>{
   setupMobileProtections();
   keepSupabaseAlive();
-  refreshAdminSetupAvailability();
   const loggedIn=await checkAuthSession();
   if(loggedIn){
     await applyRolloverPenalties();

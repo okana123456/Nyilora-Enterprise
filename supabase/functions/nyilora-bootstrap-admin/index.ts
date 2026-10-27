@@ -1,7 +1,6 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
-const BUSINESS_ID = "BIZ-NYILORA";
 const PROJECT_HOST = "sedzaagjqfsoxglcwyed.supabase.co";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -41,11 +40,7 @@ serve(async (req) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   try {
-    const { count, error: countError } = await admin.from("loan_staff")
-      .select("id", { count: "exact", head: true }).eq("business_id", BUSINESS_ID);
-    if (countError) throw countError;
-    if (req.method === "GET") return json({ ok: true, available: count === 0 && setupKey.length >= 32 });
-    if (count !== 0) return json({ ok: false, message: "First administrator setup is already complete." }, 409);
+    if (req.method === "GET") return json({ ok: true, available: setupKey.length >= 32 });
     if (setupKey.length < 32) return json({ ok: false, message: "Nyilora administrator setup is not configured." }, 503);
 
     const body = await req.json().catch(() => ({}));
@@ -54,12 +49,13 @@ serve(async (req) => {
       return json({ ok: false, message: "Invalid administrator setup key." }, 403);
     }
     const name = String(body.name || "").trim();
+    const companyName = String(body.company_name || "").trim();
     const email = String(body.email || "").trim().toLowerCase();
     const password = String(body.password || "");
-    if (name.length < 2 || name.length > 160 ||
+    if (name.length < 2 || name.length > 160 || companyName.length < 2 || companyName.length > 160 ||
       !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
       password.length < 12 || password.length > 128) {
-      return json({ ok: false, message: "Enter a name, valid email and password of at least 12 characters." }, 400);
+      return json({ ok: false, message: "Enter a company name, administrator name, valid email and password of at least 12 characters." }, 400);
     }
 
     const { data: created, error: authError } = await admin.auth.admin.createUser({
@@ -73,22 +69,23 @@ serve(async (req) => {
     }
 
     const authId = created.user.id;
-    const { data: claimed, error: claimError } = await admin.rpc("nyilora_claim_first_admin", {
-      p_auth_user_id: authId, p_name: name, p_email: email,
+    const { data: claimed, error: claimError } = await admin.rpc("nyilora_register_business_admin", {
+      p_auth_user_id: authId, p_company_name: companyName, p_name: name, p_email: email,
     });
     if (claimError || !claimed?.ok) {
       // A network interruption can occur after the database committed. Check
       // before deleting the login so an administrator is never orphaned.
-      const { data: linked } = await admin.from("loan_staff").select("id")
-        .eq("business_id", BUSINESS_ID).eq("auth_user_id", authId).maybeSingle();
-      if (linked?.id) return json({ ok: true, message: "Administrator created. Sign in with the new password." });
+      const { data: linked } = await admin.from("loan_staff").select("id,business_id")
+        .eq("auth_user_id", authId).maybeSingle();
+      if (linked?.id) return json({ ok: true, business_id: linked.business_id, message: "Business and administrator created. Sign in with the new password." });
       const removed = await admin.auth.admin.deleteUser(authId);
       if (removed.error) {
         return json({ ok: false, message: "Setup needs administrator review. Do not retry this email yet." }, 500);
       }
       return json({ ok: false, message: claimError?.message || "Administrator setup was not completed." }, 409);
     }
-    return json({ ok: true, message: "Administrator created. Sign in with the new password." });
+    return json({ ok: true, business_id: claimed.business_id,
+      message: "Business and administrator created. Sign in with the new password." });
   } catch (error) {
     console.error("Nyilora administrator setup failed", error);
     return json({ ok: false, message: "Administrator setup failed. Check the function logs." }, 500);

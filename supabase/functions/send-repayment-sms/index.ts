@@ -1,7 +1,16 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
-const NYILORA_BUSINESS_ID = Deno.env.get('NYILORA_BUSINESS_ID')?.trim() || '';
-const NYILORA_SMS_SENDER_ID = Deno.env.get('NYILORA_SMS_SENDER_ID')?.trim() || '';
+const ORIGINAL_BUSINESS_ID = "BIZ-NYILORA";
+
+function smsConfig(businessId: string) {
+  const suffix = businessId.replace(/^BIZ-/i, "").replace(/[^A-Z0-9]/gi, "_").toUpperCase();
+  const original = businessId === ORIGINAL_BUSINESS_ID;
+  return {
+    token: Deno.env.get(original ? "NYILORA_SMS_API_TOKEN" : `NYILORA_SMS_API_TOKEN__${suffix}`)?.trim() || "",
+    url: Deno.env.get(original ? "NYILORA_SMS_SEND_URL" : `NYILORA_SMS_SEND_URL__${suffix}`)?.trim() || "",
+    sender: Deno.env.get(original ? "NYILORA_SMS_SENDER_ID" : `NYILORA_SMS_SENDER_ID__${suffix}`)?.trim() || "",
+  };
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -50,16 +59,6 @@ async function callerBusinessId(
     .limit(1)
     .maybeSingle();
   let { data: staff } = await query;
-  if (!staff && userData.user.email) {
-    const fallback = await admin
-      .from("loan_staff")
-      .select("business_id")
-      .ilike("email", userData.user.email)
-      .eq("is_active", true)
-      .limit(1)
-      .maybeSingle();
-    staff = fallback.data;
-  }
   return staff?.business_id || null;
 }
 
@@ -87,7 +86,7 @@ function kenyaTodayUtcBounds() {
   };
 }
 
-async function sendSmsProviderDirect(smsProviderToken: string, sendUrl: string, phone: unknown) {
+async function sendSmsProviderDirect(smsProviderToken: string, sendUrl: string, senderId: string, phone: unknown) {
   const recipient = kenyaPhone(phone);
   if (!recipient) return { ok: false, code: "invalid_phone", message: "Phone number is invalid" };
 
@@ -103,7 +102,7 @@ async function sendSmsProviderDirect(smsProviderToken: string, sendUrl: string, 
       },
       body: JSON.stringify({
         recipient,
-        sender_id: NYILORA_SMS_SENDER_ID,
+        sender_id: senderId,
         type: "plain",
         message,
       }),
@@ -130,10 +129,17 @@ async function sendSmsProviderDirect(smsProviderToken: string, sendUrl: string, 
 
 async function deliverClaim(
   admin: ReturnType<typeof createClient>,
-  smsProviderToken: string,
-  sendUrl: string,
   claim: any,
 ) {
+  const config = smsConfig(String(claim.business_id || ""));
+  const senderId = String(claim.sender_id || config.sender).trim();
+  if (!config.token || !config.url || !senderId) {
+    await admin.rpc("nyilora_complete_repayment_sms", {
+      p_outbox_id: claim.outbox_id,p_status: "failed",
+      p_error: "SMS provider or sender is not configured for this business",p_refund: true,
+    });
+    return { ok: false, code: "sms_not_configured" };
+  }
   const recipient = kenyaPhone(claim.recipient);
   if (!recipient) {
     await admin.rpc("nyilora_complete_repayment_sms", {
@@ -147,16 +153,16 @@ async function deliverClaim(
 
   let response: Response;
   try {
-    response = await fetch(sendUrl, {
+    response = await fetch(config.url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${smsProviderToken}`,
+        Authorization: `Bearer ${config.token}`,
         "Content-Type": "application/json",
         Accept: "application/json",
       },
       body: JSON.stringify({
         recipient,
-        sender_id: NYILORA_SMS_SENDER_ID,
+        sender_id: senderId,
         type: "plain",
         message: claim.message,
       }),
@@ -200,11 +206,6 @@ serve(async (req) => {
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-  const smsProviderToken = Deno.env.get("NYILORA_SMS_API_TOKEN")?.trim() || "";
-  const sendUrl = Deno.env.get("NYILORA_SMS_SEND_URL")?.trim() || "";
-  if (!NYILORA_BUSINESS_ID || !NYILORA_SMS_SENDER_ID || !smsProviderToken || !sendUrl)
-    return json({ ok: false, code: "sms_not_configured", message: "Nyilora SMS provider setup is incomplete" }, 503);
-
   const body = await req.json().catch(() => ({}));
   const directTestPhone = String(body?.direct_test_phone || "").trim();
   const processTodaySms = body?.process_today_sms === true;
@@ -214,7 +215,10 @@ serve(async (req) => {
     if (!expectedPin || suppliedPin !== expectedPin) {
       return json({ ok: false, message: "Direct SMS provider test requires the correct NYILORA_SMS_TEST_PIN." }, 401);
     }
-    return json(await sendSmsProviderDirect(smsProviderToken, sendUrl, directTestPhone));
+    const config = smsConfig(String(body?.business_id || ORIGINAL_BUSINESS_ID));
+    if (!config.token || !config.url || !config.sender)
+      return json({ ok: false, code: "sms_not_configured" }, 503);
+    return json(await sendSmsProviderDirect(config.token, config.url, config.sender, directTestPhone));
   }
 
   if (!supabaseUrl || !serviceKey) return json({ ok: false, message: "Supabase secrets are missing" }, 500);
@@ -230,7 +234,7 @@ serve(async (req) => {
       return json({ ok: false, message: "Processing queued SMS requires the correct NYILORA_SMS_TEST_PIN." }, 401);
     }
 
-    const businessId = NYILORA_BUSINESS_ID;
+    const businessId = String(body?.business_id || ORIGINAL_BUSINESS_ID);
     const limit = Math.max(1, Math.min(Number(body?.limit || 100), 200));
     const bounds = kenyaTodayUtcBounds();
     const { data: pending, error: pendingError } = await admin
@@ -260,7 +264,7 @@ serve(async (req) => {
         results.push({ repayment_id: repaymentId, ...claim });
         continue;
       }
-      const result = await deliverClaim(admin, smsProviderToken, sendUrl, claim);
+      const result = await deliverClaim(admin, claim);
       results.push({ repayment_id: repaymentId, ...result });
     }
 
@@ -282,7 +286,21 @@ serve(async (req) => {
       message: "Unauthorized: use this Nyilora project's service_role key in Authorization or apikey.",
     }, 401);
   }
-  const businessId = callerBusiness === "__service_role__" ? NYILORA_BUSINESS_ID : callerBusiness;
+  let businessId = callerBusiness;
+  if (callerBusiness === "__service_role__") {
+    const repaymentId = String(body?.repayment_id || "");
+    const clientId = String(body?.client_id || "");
+    if (repaymentId) {
+      const result = await admin.from("loan_repayments").select("business_id")
+        .eq("id",repaymentId).maybeSingle();
+      businessId = result.data?.business_id || null;
+    } else if (clientId) {
+      const result = await admin.from("loan_clients").select("business_id")
+        .eq("id",clientId).maybeSingle();
+      businessId = result.data?.business_id || null;
+    } else businessId = String(body?.business_id || "") || null;
+    if (!businessId) return json({ ok: false, message: "Business could not be identified." }, 400);
+  }
 
   if (String(body?.sms_type || "").trim() === "custom") {
     const message = String(body?.message || "").trim();
@@ -312,7 +330,7 @@ serve(async (req) => {
         continue;
       }
 
-      const result = await deliverClaim(admin, smsProviderToken, sendUrl, claim);
+      const result = await deliverClaim(admin, claim);
       if (result.ok) sent++; else failed++;
       results.push({ phone, ...result });
     }
@@ -329,7 +347,7 @@ serve(async (req) => {
     if (claimError) return json({ ok: false, message: claimError.message }, 500);
     if (!claim?.ok || claim?.already_sent) return json(claim || { ok: false }, claim?.ok ? 200 : 400);
 
-    const result = await deliverClaim(admin, smsProviderToken, sendUrl, claim);
+    const result = await deliverClaim(admin, claim);
     return json({ ...result, test: true, recipient: kenyaPhone(testPhone) });
   }
 
@@ -354,7 +372,7 @@ serve(async (req) => {
     if (claimError) return json({ ok: false, message: claimError.message }, 500);
     if (!claim?.ok || claim?.already_sent) return json(claim || { ok: false }, claim?.ok ? 200 : 400);
 
-    const result = await deliverClaim(admin, smsProviderToken, sendUrl, claim);
+    const result = await deliverClaim(admin, claim);
     return json({ ...result, onboarding: true, recipient: kenyaPhone(claim.recipient) });
   }
 
@@ -401,7 +419,7 @@ serve(async (req) => {
       continue;
     }
 
-    const result = await deliverClaim(admin, smsProviderToken, sendUrl, claim);
+    const result = await deliverClaim(admin, claim);
     results.push({ repayment_id: repaymentId, ...result });
   }
 

@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
-const NYILORA_BUSINESS_ID = Deno.env.get('NYILORA_BUSINESS_ID')?.trim() || '';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -54,7 +53,7 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-    if (!NYILORA_BUSINESS_ID || !supabaseUrl || !serviceKey) return json({ ok: false, message: "Nyilora SMS payment setup is incomplete." }, 503);
+    if (!supabaseUrl || !serviceKey) return json({ ok: false, message: "Nyilora SMS payment setup is incomplete." }, 503);
     const supabase = createClient(supabaseUrl, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
@@ -64,9 +63,8 @@ serve(async (req) => {
     if (authError || !authData.user) return json({ ok: false, message: "Your session has expired." }, 401);
     const { data: staff, error: staffError } = await supabase
       .from("loan_staff")
-      .select("id, business_id, role, is_active")
+      .select("id, business_id, branch_id, role, is_active")
       .eq("auth_user_id", authData.user.id)
-      .eq("business_id", NYILORA_BUSINESS_ID)
       .maybeSingle();
     if (staffError) throw staffError;
 
@@ -101,6 +99,7 @@ serve(async (req) => {
       .from("nyilora_sms_bundle_requests")
       .insert({
         business_id: staff.business_id,
+        branch_id: staff.branch_id,
         credits,
         amount,
         customer_amount: amount,

@@ -1,5 +1,4 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-const NYILORA_BUSINESS_ID = Deno.env.get('NYILORA_BUSINESS_ID')?.trim() || '';
 
 function callbackResponse() {
   return new Response(JSON.stringify({ ResultCode: 0, ResultDesc: "Accepted" }), {

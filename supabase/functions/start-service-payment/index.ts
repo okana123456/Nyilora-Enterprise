@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
-const NYILORA_BUSINESS_ID = Deno.env.get('NYILORA_BUSINESS_ID')?.trim() || '';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -42,7 +41,7 @@ function billingMonth() {
 }
 
 function billingAmount(month: string, businessId: string) {
-  return businessId === NYILORA_BUSINESS_ID && month >= "2026-12-01" ? 3000 : 0;
+  return businessId && month >= "2026-12-01" ? 3000 : 0;
 }
 
 serve(async (req) => {
@@ -58,7 +57,7 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-    if (!NYILORA_BUSINESS_ID || !supabaseUrl || !serviceKey) return json({ ok: false, message: "Nyilora payment setup is incomplete." }, 503);
+    if (!supabaseUrl || !serviceKey) return json({ ok: false, message: "Nyilora payment setup is incomplete." }, 503);
     const supabase = createClient(supabaseUrl, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
@@ -71,14 +70,13 @@ serve(async (req) => {
       .from("loan_staff")
       .select("id, business_id, role, is_active")
       .eq("auth_user_id", authData.user.id)
-      .eq("business_id", NYILORA_BUSINESS_ID)
       .maybeSingle();
     if (staffError) throw staffError;
 
     if (!staff?.is_active || !["admin", "branch_manager"].includes(staff.role)) {
       return json({ ok: false, message: "Only admins can renew the system subscription." }, 403);
     }
-    if (staff.business_id !== NYILORA_BUSINESS_ID || billingMonth() < "2026-12-01") {
+    if (billingMonth() < "2026-12-01") {
       return json({ ok: false, message: "Nyilora subscription billing starts in December 2026." }, 400);
     }
 
