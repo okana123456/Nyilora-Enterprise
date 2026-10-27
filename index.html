@@ -1459,15 +1459,17 @@ async function submitNewPassword(){
   const newPwd=$('#newResetPassword').value;
   const confirmPwd=$('#confirmResetPassword').value;
 
-  if(!newPwd||newPwd.length<6)return toast('Password must be at least 6 characters long.','warning');
+  if(!newPwd||newPwd.length<(new URLSearchParams(window.location.search).has('nyilora_invite')?8:6))return toast('Password is too short. Use at least 8 characters for a new staff account.','warning');
   if(newPwd !== confirmPwd) return toast('Passwords do not match.','error');
 
   try{
     const{error}=await supabaseClient.auth.updateUser({password:newPwd});
     if(error)throw error;
-    toast('Password updated successfully! Please sign in with your new password.','success');
+    const wasInvite=new URLSearchParams(window.location.search).has('nyilora_invite');
+    toast(wasInvite?'Password set. You can now sign in.':'Password updated successfully! Please sign in with your new password.','success');
     closeModal();
     await supabaseClient.auth.signOut();
+    if(wasInvite)window.history.replaceState(null,'',window.location.pathname);
     document.getElementById('loginPassword').value = '';
     switchAuthTab('signin');
   }catch(e){toast(e.message,'error');}
@@ -1549,6 +1551,10 @@ async function checkAuthSession(){
   if(checkSessionTimeout()) return false;
   localStorage.removeItem('nyilora_offline_auth');
   const{data:{session}}=await supabaseClient.auth.getSession();
+  if(new URLSearchParams(window.location.search).has('nyilora_invite')){
+    if(session?.user)openStaffInvitePasswordModal();
+    return false;
+  }
   const cachedUserStr = localStorage.getItem('nyilora_current_user');
   if (cachedUserStr && session?.user) {
       try {
@@ -1734,6 +1740,16 @@ async function executeSwitchUser(email) {
     }
 }
 
+function openStaffInvitePasswordModal(){
+  openModal(`
+    <h2>Set Your Nyilora Password</h2>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:16px">Your email invitation has been confirmed. Set a password to complete your staff account.</p>
+    <div class="form-group"><label>New Password (min 8 characters)</label><input class="input" type="password" id="newResetPassword" autocomplete="new-password"></div>
+    <div class="form-group"><label>Confirm Password</label><input class="input" type="password" id="confirmResetPassword" autocomplete="new-password"></div>
+    <div class="modal-actions"><button class="btn btn-primary" onclick="submitNewPassword()">Set Password</button></div>
+  `);
+}
+
 supabaseClient.auth.onAuthStateChange(async(event,session)=>{
   if (event === 'PASSWORD_RECOVERY') {
     openModal(`
@@ -1754,6 +1770,9 @@ supabaseClient.auth.onAuthStateChange(async(event,session)=>{
       </div>
     `);
     window.history.replaceState(null, '', window.location.pathname);
+  }
+  else if(event==='SIGNED_IN'&&session?.user&&new URLSearchParams(window.location.search).has('nyilora_invite')){
+    openStaffInvitePasswordModal();
   }
   else if(event==='SIGNED_IN'&&session?.user&&!currentUser){
     if (!window.location.hash.includes('type=recovery')) {
@@ -7276,12 +7295,20 @@ async function renderStaff(){
   if(!hasRole('admin'))return toast('Admin access required','warning');
   const main=$('#mainContent');
   try{
-    const{data:staff,error}=await sb('loan_staff').select('*,nyilora_branches(name),nyilora_staff_permissions(*)').eq('business_id',NYILORA_BUSINESS_ID).order('name');
-    if(error) throw error;
+    const [staffResult,permissionResult]=await Promise.all([
+      sb('loan_staff').select('*').eq('business_id',NYILORA_BUSINESS_ID).order('name'),
+      sb('nyilora_staff_permissions').select('*').eq('business_id',NYILORA_BUSINESS_ID)
+    ]);
+    if(staffResult.error)throw staffResult.error;
+    if(permissionResult.error)throw permissionResult.error;
+    const permissionsByStaff=new Map((permissionResult.data||[]).map(p=>[p.staff_id,p]));
+    const staff=(staffResult.data||[]).map(s=>({...s,
+      branch_name:branchList.find(b=>b.id===s.branch_id)?.name||'Unassigned',
+      staff_permissions:permissionsByStaff.get(s.id)||null}));
     main.innerHTML=`
       <div class="page-header"><h1>Staff Management</h1><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-outline" onclick="openPortfolioHandover()">Portfolio Handover</button><button class="btn btn-primary" onclick="openAddStaffModal()">+ Add Staff</button></div></div>
       <div class="table-wrap"><table><thead><tr><th>Name</th><th>Email/Phone</th><th>Branch</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead><tbody>
-      ${(staff||[]).map(s=>`<tr><td><strong>${s.name}</strong></td><td>${s.email||s.phone||'-'}</td><td>${escapeHtml(s.nyilora_branches?.name||'Unassigned')}</td><td><span class="badge badge-blue" style="max-width:150px;white-space:normal;display:inline-block">${(s.role||'').replace(/_/g,' ').toUpperCase()}</span></td><td>${s.is_active?'<span class="badge badge-green">Active</span>':'<span class="badge badge-gray">Inactive</span>'}</td><td>${fmtDateTime(s.last_login)}</td><td><button class="btn btn-outline btn-sm" onclick="editStaff('${s.id}')">Edit</button></td></tr>`).join('')}
+      ${staff.map(s=>`<tr><td><strong>${escapeHtml(s.name||'')}</strong></td><td>${escapeHtml(s.email||s.phone||'-')}</td><td>${escapeHtml(s.branch_name)}</td><td><span class="badge badge-blue" style="max-width:150px;white-space:normal;display:inline-block">${escapeHtml((s.role||'').replace(/_/g,' ').toUpperCase())}</span></td><td>${s.is_active?'<span class="badge badge-green">Active</span>':'<span class="badge badge-gray">Inactive</span>'}</td><td>${fmtDateTime(s.last_login)}</td><td><button class="btn btn-outline btn-sm" onclick="editStaff('${s.id}')">Edit</button></td></tr>`).join('')}
       </tbody></table></div>
       <div class="card" style="margin-top:20px"><h3 style="font-size:14px;margin-bottom:8px">Role Permissions</h3>
         <div style="font-size:13px;display:grid;grid-template-columns:1fr 1fr;gap:4px">
@@ -7292,7 +7319,7 @@ async function renderStaff(){
         </div>
       </div>
     `;
-  }catch(e){toast(e.message,'error')}
+  }catch(e){main.innerHTML='<div class="empty-state">Could not load staff. Please try again.</div>';toast(e.message,'error')}
 }
 
 let handoverStaff=[],handoverBranches=[],handoverCounts={};
@@ -7391,29 +7418,24 @@ async function confirmPortfolioHandover(){
 
 function openAddStaffModal(s){
   s=s||{};
-  const currentRoles = (s.role || 'viewer').split(',');
+  const currentRoles = (s.role || 'loan_officer').split(',');
   const isChecked = (val) => currentRoles.includes(val) ? 'checked' : '';
   
   openModal(`
     <h2>${s.id?'Edit':'Add'} Staff</h2>
     <div class="form-row">
       <div class="form-group"><label>Name *</label><input class="input" id="stName" value="${s.name||''}"></div>
-      <div class="form-group"><label>Email *</label><input class="input" id="stEmail" value="${s.email||''}"></div>
+      <div class="form-group"><label>Email *</label><input class="input" id="stEmail" value="${escapeHtml(s.email||'')}" ${s.id?'readonly':''}></div>
     </div>
     <div class="form-group"><label>Assigned Branch *</label><select class="select" id="stBranch">${branchOptions(s.branch_id||selectedBranchId)}</select></div>
     <div class="form-row">
       <div class="form-group"><label>Phone</label><input class="input" id="stPhone" value="${s.phone||''}"></div>
       <div class="form-group"><label>Active</label><select class="select" id="stActive"><option value="true" ${s.is_active!==false?'selected':''}>Yes</option><option value="false" ${s.is_active===false?'selected':''}>No</option></select></div>
     </div>
-    <div class="form-group"><label>Explicit Permissions</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;background:var(--bg-dark);padding:10px;border:1px solid var(--border);border-radius:8px">${[['view_accounting','View accounting'],['view_expenses','View expenses'],['initiate_expenses','Initiate expenses'],['approve_expenses','Approve expenses'],['manage_assets','Manage assets'],['manage_branches','Manage branches'],['transfer_portfolios','Transfer portfolios'],['adjust_charges_excess','Adjust Charges & Excess']].map(([k,l])=>`<label><input type="checkbox" class="st-perm-cb" value="${k}" ${s.nyilora_staff_permissions?.[0]?.[k]?'checked':''}> ${l}</label>`).join('')}</div></div>
+    <div class="form-group"><label>Explicit Permissions</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;background:var(--bg-dark);padding:10px;border:1px solid var(--border);border-radius:8px">${[['view_accounting','View accounting'],['view_expenses','View expenses'],['initiate_expenses','Initiate expenses'],['approve_expenses','Approve expenses'],['manage_assets','Manage assets'],['manage_branches','Manage branches'],['transfer_portfolios','Transfer portfolios'],['adjust_charges_excess','Adjust Charges & Excess']].map(([k,l])=>`<label><input type="checkbox" class="st-perm-cb" value="${k}" ${s.staff_permissions?.[k]?'checked':''}> ${l}</label>`).join('')}</div></div>
     ${s.id?'<p style="font-size:12px;color:var(--text-secondary)">Changing a staff member’s branch keeps existing client and loan records in their original branches. Transfer selected clients separately from the Clients tab.</p>':''}
     
-    ${!s.id ? `
-    <div class="form-group">
-      <label>Set Initial Password *</label>
-      <input class="input" type="password" id="stPwd" placeholder="Min 8 characters" autocomplete="new-password">
-    </div>
-    ` : ''}
+    ${!s.id ? '<p style="font-size:12px;color:var(--text-secondary)">The new staff member will receive an email invitation to confirm their address and set their own password.</p>' : ''}
 
     <div class="form-group">
       <label>Roles (Select all that apply)</label>
@@ -7433,7 +7455,7 @@ function openAddStaffModal(s){
     </div>
     ` : ''}
     <div class="modal-actions">
-      ${s.id && s.id !== currentUser.id ? `<button class="btn btn-danger" style="margin-right:auto" onclick="deleteStaff('${s.id}')">Delete Staff</button>` : ''}
+      ${s.id && s.id !== currentUser.id && s.is_active ? `<button class="btn btn-danger" style="margin-right:auto" onclick="deleteStaff('${s.id}')">Deactivate Staff</button>` : ''}
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" onclick="saveStaff('${s.id||''}')">${s.id?'Update':'Save'}</button>
     </div>
@@ -7453,14 +7475,12 @@ async function saveStaff(id){
 
   try{
     if (!id) {
-        const pwd = $('#stPwd').value;
-        if (!pwd || pwd.length < 8) throw new Error('Password must be at least 8 characters');
         const permissions={};
         ['view_accounting','view_expenses','initiate_expenses','approve_expenses','manage_assets','manage_branches','transfer_portfolios','adjust_charges_excess'].forEach(k=>permissions[k]=!!document.querySelector(`.st-perm-cb[value="${k}"]`)?.checked);
         const {data,error}=await supabaseClient.functions.invoke('nyilora-create-staff',{
           body:{name:name.trim(),email:email.trim(),phone:$('#stPhone').value||null,
             role:selectedRoles,is_active:$('#stActive').value==='true',branch_id:$('#stBranch').value,
-            password:pwd,permissions}
+            permissions}
         });
         if(error){
           const details=await error.context?.json?.().catch(()=>null);
@@ -7468,7 +7488,7 @@ async function saveStaff(id){
         }
         if(!data?.ok)throw new Error(data?.message||'Could not create staff login');
         await audit('staff_created','loan_staff',data.staff_id,null,{name,email:email.trim()});
-        toast('Staff login created. The initial password is ready to use.','success');
+        toast('Staff invitation sent. They must confirm the email and set a password.','success');
         closeModal();renderStaff();
         return;
     }
@@ -7504,17 +7524,28 @@ async function sendStaffReset(email) {
 }
 
 async function deleteStaff(id) {
-    if(!await confirm_('Are you sure you want to permanently delete this staff member? They will lose all access.')) return;
+    if(!await confirm_('Deactivate this staff member? Their existing loan records will remain, but they will lose access.')) return;
     try {
-        await sb('loan_staff').delete().eq('id', id);
-        await audit('staff_deleted', 'loan_staff', id, null, null);
-        toast('Staff member deleted', 'success');
+        const {error}=await sb('loan_staff').update({is_active:false}).eq('id',id).eq('business_id',NYILORA_BUSINESS_ID).select('id').single();
+        if(error)throw error;
+        await audit('staff_deactivated', 'loan_staff', id, null, null);
+        toast('Staff member deactivated', 'success');
         closeModal();
         renderStaff();
     } catch(e) { toast(e.message, 'error'); }
 }
 
-async function editStaff(id){const{data:s}=await sb('loan_staff').select('*,nyilora_staff_permissions(*)').eq('id',id).single();if(s)openAddStaffModal(s)}
+async function editStaff(id){
+  try{
+    const [staffResult,permissionResult]=await Promise.all([
+      sb('loan_staff').select('*').eq('id',id).eq('business_id',NYILORA_BUSINESS_ID).single(),
+      sb('nyilora_staff_permissions').select('*').eq('staff_id',id).eq('business_id',NYILORA_BUSINESS_ID).maybeSingle()
+    ]);
+    if(staffResult.error)throw staffResult.error;
+    if(permissionResult.error)throw permissionResult.error;
+    openAddStaffModal({...staffResult.data,staff_permissions:permissionResult.data});
+  }catch(e){toast(e.message,'error')}
+}
 
 // ═══ CALCULATOR ═══
 function renderCalculator(){

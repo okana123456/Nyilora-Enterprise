@@ -19,6 +19,10 @@ The user has run `NYILORA-FOUNDATION-ONE-RUN.sql`, migrations `0005` through `00
 
 The public Sign Up flow has been replaced with a one-time first-admin setup form. Run `supabase/migrations/0026_nyilora_first_admin_gate.sql` in the **Nyilora** SQL Editor, then check it with `NYILORA-ADMIN-SETUP-CHECK.sql`. Set `NYILORA_ADMIN_SETUP_KEY` in **Nyilora's Supabase Edge Function Secrets**, and deploy `supabase/functions/nyilora-bootstrap-admin/index.ts` as `nyilora-bootstrap-admin`. The key value is supplied privately to the owner and must never be placed in Git or `config.js`. The Edge Function creates a confirmed Auth user, then calls the database gate to create the only initial admin and grant its permissions. The database gate rejects a second first-admin claim even if two requests arrive together. Later staff accounts are created by an authenticated administrator through `nyilora-create-staff`. After the first administrator has signed in, disable public signups in Nyilora's Supabase Authentication settings and remove or rotate the setup key. The function's public status request hides the setup tab once staff exists.
 
+## Staff invitations
+
+Deploy `supabase/functions/nyilora-create-staff/index.ts` as the `nyilora-create-staff` Edge Function after updating the website. In Supabase Authentication URL Configuration, allow `https://nyilora-enterprise-v1.vercel.app/**` as a redirect URL and set the Site URL to the Nyilora website. Configure Supabase Auth email delivery for invitations. An administrator adds a staff member with a role and branch; Supabase sends an invitation to that email address. The recipient opens the invitation and chooses a password before signing in. The Staff page reads staff, permissions, and branch names separately to avoid ambiguous relationship errors. Deactivating staff preserves their historical loans and repayments.
+
 ## Details needed to finish
 
 1. Nyilora will choose its initial administrator later. Use the private one-time setup key and first-admin form when ready.

@@ -1,8 +1,6 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
-const NYILORA_BUSINESS_ID = Deno.env.get('NYILORA_BUSINESS_ID')?.trim() || '';
-
-const BUSINESS_ID = NYILORA_BUSINESS_ID;
+const BUSINESS_ID = "BIZ-NYILORA";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
@@ -26,8 +24,10 @@ serve(async (req) => {
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  const configuredBusiness = Deno.env.get("NYILORA_BUSINESS_ID")?.trim();
   const token = /^Bearer (.+)$/i.exec(req.headers.get("authorization") || "")?.[1];
   if (!supabaseUrl || !serviceKey) return json({ ok: false, message: "Supabase secrets are missing." }, 500);
+  if (configuredBusiness && configuredBusiness !== BUSINESS_ID) return json({ ok: false, message: "Nyilora business configuration is incorrect." }, 500);
   if (!token) return json({ ok: false, message: "Sign in again before creating staff." }, 401);
 
   const admin = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -56,14 +56,13 @@ serve(async (req) => {
     const body = await req.json();
     const name = String(body.name || "").trim();
     const email = String(body.email || "").trim().toLowerCase();
-    const password = String(body.password || "");
     const phone = String(body.phone || "").trim() || null;
     const branchId = String(body.branch_id || "").trim();
     const selectedRoles = String(body.role || "").split(",").map((r: string) => r.trim()).filter(Boolean);
     if (!name || name.length > 160 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !branchId ||
-        password.length < 8 || password.length > 128 || !selectedRoles.length ||
+        !selectedRoles.length ||
         selectedRoles.some((r: string) => !roles.has(r)) || new Set(selectedRoles).size !== selectedRoles.length) {
-      return json({ ok: false, message: "Enter a name, valid email, assigned branch, valid roles and password of at least 8 characters." }, 400);
+      return json({ ok: false, message: "Enter a name, valid email, assigned branch and valid roles." }, 400);
     }
 
     const { data: branch, error: branchError } = await admin.from("nyilora_branches")
@@ -76,10 +75,11 @@ serve(async (req) => {
     if (existingError) throw existingError;
     if (existingStaff?.length) return json({ ok: false, message: "This email already has a Nyilora staff record. Edit that record or send a password reset link." }, 409);
 
-    // Create the login as confirmed so the password works immediately. Never
-    // use browser signUp here: it may leave an Auth user when staff RLS rejects.
-    const { data: authData, error: createError } = await admin.auth.admin.createUser({
-      email, password, email_confirm: true, user_metadata: { full_name: name },
+    // Supabase Auth sends this invitation and confirms the address when opened.
+    // The invited staff member then sets their own password in the app.
+    const { data: authData, error: createError } = await admin.auth.admin.inviteUserByEmail(email, {
+      data: { full_name: name },
+      redirectTo: "https://nyilora-enterprise-v1.vercel.app/?nyilora_invite=1",
     });
     if (createError || !authData?.user?.id) {
       if (/already|registered|exists/i.test(createError?.message || "")) {
@@ -104,7 +104,7 @@ serve(async (req) => {
     const { error: permissionError } = await admin.from("nyilora_staff_permissions").upsert(permissions, { onConflict: "staff_id" });
     if (permissionError) throw permissionError;
 
-    return json({ ok: true, staff_id: staff.id, message: "Staff login created. The initial password is ready to use." });
+    return json({ ok: true, staff_id: staff.id, message: "Staff invitation sent. The recipient must confirm the email and set a password." });
   } catch (error) {
     // A failed staff insert must not leave a new login that cannot sign in.
     let cleanupError: string | null = null;
