@@ -1,0 +1,10 @@
+{
+  "name": "nyilora-enterprise",
+  "private": true,
+  "scripts": {
+    "test": "node tests/nyilora-isolation.test.cjs && node tests/nyilora-frontend-syntax.test.cjs && node tests/nyilora-next-sql.test.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.3.14"
+  }
+}
