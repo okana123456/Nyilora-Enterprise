@@ -1321,6 +1321,17 @@ function getAutoTier(amount){
   return amount<=s.micro_threshold?'Micro Loan':'Standard Loan';
 }
 
+function nyiloraProductEligible(product,amount,weeks){
+  return !!product && product.is_active!==false &&
+    Number(amount)>=Number(product.min_amount) && Number(amount)<=Number(product.max_amount) &&
+    Number(weeks)>=Number(product.min_term_weeks) && Number(weeks)<=Number(product.max_term_weeks) &&
+    product.interest_period==='weekly' && product.interest_type==='flat';
+}
+
+function nyiloraSelectedApplicationProduct(){
+  return (window._appProducts||[]).find(p=>p.id===$('#appProduct')?.value)||null;
+}
+
 // ═══ AUTH — EMAIL + GOOGLE ═══
 
 function switchAuthTab(tab){
@@ -2900,7 +2911,7 @@ async function renderProducts(){
             <div><span style="color:var(--text-secondary)">Amount:</span> ${fmtMoney(p.min_amount)} - ${fmtMoney(p.max_amount)}</div>
             <div><span style="color:var(--text-secondary)">Rate:</span> ${p.interest_rate}% / ${p.interest_period||'weekly'}</div>
             <div><span style="color:var(--text-secondary)">Term:</span> ${p.min_term_weeks}-${p.max_term_weeks} weeks</div>
-            <div><span style="color:var(--text-secondary)">Fee:</span> ${p.processing_fee_pct}%</div>
+            <div><span style="color:var(--text-secondary)">Processing fee:</span> ${fmtMoney(PROCESSING_FEE_FLAT)} flat</div>
           </div>
           <div style="margin-top:12px;display:flex;gap:6px">${hasRole('admin')?`<button class="btn btn-outline btn-sm" onclick="editProduct('${p.id}')">Edit</button><button class="btn btn-outline btn-sm" onclick="deleteProduct('${p.id}')">Delete</button>`:'<span style="font-size:12px;color:var(--text-secondary)">View only</span>'}</div>
         </div>
@@ -2919,7 +2930,7 @@ function openAddProductModal(prod){
     <div class="form-row"><div class="form-group"><label>Min Amount</label><input class="input" type="number" id="pMinAmt" value="${p.min_amount||500}"></div><div class="form-group"><label>Max Amount</label><input class="input" type="number" id="pMaxAmt" value="${p.max_amount||100000}"></div></div>
     <div class="form-row"><div class="form-group"><label>Interest Rate (%)</label><input class="input" type="number" step="0.01" id="pRate" value="${p.interest_rate||5}"></div><div class="form-group"><label>Interest Type</label><select class="select" id="pIntType"><option value="flat" ${p.interest_type==='flat'?'selected':''}>Flat Rate</option><option value="reducing_balance" ${p.interest_type==='reducing_balance'?'selected':''}>Reducing Balance</option></select></div></div>
     <div class="form-row"><div class="form-group"><label>Min Term (weeks)</label><input class="input" type="number" id="pMinTerm" value="${p.min_term_weeks||1}"></div><div class="form-group"><label>Max Term (weeks)</label><input class="input" type="number" id="pMaxTerm" value="${p.max_term_weeks||52}"></div></div>
-    <div class="form-row"><div class="form-group"><label>Processing Fee %</label><input class="input" type="number" step="0.1" id="pFee" value="${p.processing_fee_pct||3}"></div><div class="form-group"><label>Late Penalty %</label><input class="input" type="number" step="0.1" id="pPenalty" value="${p.late_penalty_pct||5}"></div></div>
+    <div class="form-row"><div class="form-group"><label>Processing Fee</label><div class="input">KES 500 flat per loan</div><input type="hidden" id="pFee" value="${p.processing_fee_pct||0}"></div><div class="form-group"><label>Late Penalty %</label><input class="input" type="number" step="0.1" id="pPenalty" value="${p.late_penalty_pct||5}"></div></div>
     <div class="form-row"><div class="form-group"><label>Grace Period (days)</label><input class="input" type="number" id="pGrace" value="${p.grace_period_days||3}"></div><div class="form-group"><label>Active</label><select class="select" id="pActive"><option value="true" ${p.is_active!==false?'selected':''}>Yes</option><option value="false" ${p.is_active===false?'selected':''}>No</option></select></div></div>
     <div class="form-group"><label><input type="checkbox" id="pGuarantor" ${p.requires_guarantor?'checked':''}> Requires Guarantor</label></div>
     <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveProduct('${p.id||''}')">${p.id?'Update':'Save'} Product</button></div>
@@ -2951,7 +2962,7 @@ let appPage=1;
 async function renderApplications(page=1){
   appPage=page;const main=$('#mainContent');
   try{
-    let query=sb('loan_applications').select('*,loan_clients:loan_clients!loan_applications_client_id_fkey(full_name,phone,id_number)').eq('business_id', currentUser.business_id).order('created_at',{ascending:false});
+    let query=sb('loan_applications').select('*,loan_clients:loan_clients!loan_applications_client_id_fkey(full_name,phone,id_number),loan_products:loan_products!nyilora_application_product_fk(name)').eq('business_id', currentUser.business_id).order('created_at',{ascending:false});
     if(selectedBranchId)query=query.eq('branch_id',selectedBranchId);
     const{data:apps}=await query;
     cachedData.applications=apps||[];
@@ -2974,7 +2985,7 @@ function renderAppRows(apps){
     <td><strong>${a.loan_clients?.full_name||'—'}</strong></td>
     <td>${a.loan_clients?.phone||'-'}</td>
     <td>${fmtMoney(a.applied_amount)}</td><td>${a.applied_term_weeks}w</td>
-    <td><span class="badge badge-blue">${getAutoTier(a.applied_amount)}</span></td>
+    <td><span class="badge badge-blue">${escapeHtml(a.loan_products?.name||getAutoTier(a.applied_amount))}</span></td>
     <td>${statusBadge(a.status)}</td><td>${fmtDate(a.created_at)}</td>
     <td>
       <button class="btn btn-outline btn-sm" onclick="viewApplication('${a.id}')">View</button>
@@ -3014,6 +3025,7 @@ async function openNewApplication(preselectedClientId=''){
       <p style="font-size:12px;color:var(--text-secondary);margin-top:6px">💡 Guarantor details are collected during client registration.</p>
     </div>
     <div id="appStep2" style="display:none">
+      <div class="form-group"><label>Loan Product *</label><select class="select" id="appProduct" onchange="appCalcUpdate()"><option value="">Select a product</option>${(products||[]).map(p=>`<option value="${p.id}">${escapeHtml(p.name)} · ${fmtMoney(p.min_amount)}–${fmtMoney(p.max_amount)} · ${p.interest_rate}% weekly · ${p.min_term_weeks}–${p.max_term_weeks} weeks</option>`).join('')}</select></div>
       <div class="form-group"><label>Loan Amount *</label><input class="input" type="number" id="appAmount" oninput="appCalcUpdate()" placeholder="Enter amount"></div>
       <div id="appTierInfo" class="card" style="margin:8px 0;font-size:13px;display:none"></div>
       <div class="form-group"><label>Term (weeks) *</label><input class="input" type="number" id="appTerm" oninput="appCalcUpdate()" placeholder="Number of weeks"></div>
@@ -3067,7 +3079,10 @@ function appStepNav(dir){
   if(s===3){
     const amt=Number($('#appAmount').value);
     if(!amt||amt<=0)return toast('Enter a valid loan amount','warning');
-    if(!$('#appTerm').value)return toast('Enter loan term in weeks','warning');
+    const term=Number($('#appTerm').value);
+    if(!term)return toast('Enter loan term in weeks','warning');
+    if(!nyiloraProductEligible(nyiloraSelectedApplicationProduct(),amt,term))
+      return toast('Select a product that allows this amount and term','warning');
     buildAppReview();
   }
   window._appStep=s;
@@ -3082,16 +3097,16 @@ function appStepNav(dir){
 function appCalcUpdate(){
   const amt=Number($('#appAmount').value)||0;const term=Number($('#appTerm').value)||0;
   const tierInfo=$('#appTierInfo');
-  if(amt>0&&tierInfo){
-    const rate=getAutoRate(amt);
-    const tier=getAutoTier(amt);
+  const product=nyiloraSelectedApplicationProduct();
+  if(amt>0&&product&&tierInfo){
+    const eligible=nyiloraProductEligible(product,amt,term);
     tierInfo.style.display='block';
-    tierInfo.innerHTML=`Auto-detected: <strong>${tier}</strong> at <strong>${rate}% per week</strong>`;
-    if(term>0){
-      const c=calcLoan(amt,rate,'flat',term);
-      $('#appCalcResult').innerHTML=`<div style="font-size:13px"><strong>Weekly:</strong> ${fmtMoney(c.weekly)} | <strong>Total Interest:</strong> ${fmtMoney(c.totalInterest)} | <strong>Total:</strong> ${fmtMoney(c.totalPayable)}</div>`;
-    }
-  }else if(tierInfo){tierInfo.style.display='none'}
+    tierInfo.innerHTML=eligible
+      ?`<strong>${escapeHtml(product.name)}</strong> · ${product.interest_rate}% flat interest per week · KES 500 processing fee charged separately`
+      :`<strong>${escapeHtml(product.name)}</strong> allows ${fmtMoney(product.min_amount)}–${fmtMoney(product.max_amount)} for ${product.min_term_weeks}–${product.max_term_weeks} weeks.`;
+    const quote=eligible?calcLoan(amt,Number(product.interest_rate),'flat',term):null;
+    $('#appCalcResult').innerHTML=quote?`<div style="font-size:13px"><strong>Weekly:</strong> ${fmtMoney(quote.weekly)} | <strong>Total Interest:</strong> ${fmtMoney(quote.totalInterest)} | <strong>Total:</strong> ${fmtMoney(quote.totalPayable)}</div>`:'';
+  }else if(tierInfo){tierInfo.style.display='none';$('#appCalcResult').innerHTML=''}
 }
 
 function buildAppReview(){
@@ -3099,8 +3114,9 @@ function buildAppReview(){
   const c=(window._appClients||[]).find(x=>x.id===id);
   const client = c?`${c.full_name} (${c.phone||''})`:'-';
   const amt=Number($('#appAmount').value);
-  const rate=getAutoRate(amt);
-  const tier=getAutoTier(amt);
+  const product=nyiloraSelectedApplicationProduct();
+  const rate=Number(product.interest_rate);
+  const tier=product.name;
   const calc=calcLoan(amt,rate,'flat',Number($('#appTerm').value));
   $('#appReview').innerHTML=`<div class="card"><h3 style="font-size:14px;margin-bottom:12px">Application Summary</h3>
     <p><strong>Client:</strong> ${client}</p><p><strong>Tier:</strong> ${tier}</p>
@@ -3169,28 +3185,11 @@ async function submitApplication(){
       .select('branch_id').eq('id',selectedClientId).eq('business_id',currentUser.business_id).single();
     if(applicationClientError)throw applicationClientError;
     if(!applicationClient?.branch_id)throw new Error('Assign this client to a branch before submitting an application.');
-    const rec={application_no:appNo,client_id:selectedClientId,applied_amount:amt,applied_term_weeks:Number($('#appTerm').value),purpose:$('#appPurpose').value,status:'submitted',loan_officer_id:appOfficerId,business_id:currentUser?.business_id,branch_id:applicationClient.branch_id,loan_type:loanType};
-    
-    // Robust auto-tier → product mapping (case-insensitive, trims, fallbacks)
-    const tier=getAutoTier(amt);
-    const tierLower=tier.toLowerCase();
-    const{data:bizProducts}=await sb('loan_products').select('id,name,is_active').eq('business_id', currentUser.business_id).eq('is_active',true);
-    let matchProduct=(bizProducts||[]).find(p=>(p.name||'').trim().toLowerCase()===tierLower);
-    if(!matchProduct) matchProduct=(bizProducts||[]).find(p=>(p.name||'').toLowerCase().includes(tierLower.split(' ')[0]));
-    if(matchProduct){
-      rec.product_id=matchProduct.id;
-    } else {
-      console.warn(`No product matched tier "${tier}" for business; submitting without product_id.`);
-      // Do NOT add product_id if no match — prevents 400 from unknown column
-    }
-    // Try with product_id first; if Supabase rejects (column may not exist), retry without
-    let{error}=await sb('loan_applications').insert(rec);
-    if(error && error.code==='PGRST204' || (error && /product_id|column/.test(error.message||''))){
-      console.warn('product_id column not found in DB — retrying without it');
-      const recFallback={...rec}; delete recFallback.product_id;
-      const res2=await sb('loan_applications').insert(recFallback);
-      error=res2.error;
-    }
+    const product=nyiloraSelectedApplicationProduct();
+    if(!nyiloraProductEligible(product,amt,Number($('#appTerm').value)))
+      throw new Error('Select a product that allows this amount and term.');
+    const rec={application_no:appNo,client_id:selectedClientId,applied_amount:amt,applied_term_weeks:Number($('#appTerm').value),purpose:$('#appPurpose').value,status:'submitted',loan_officer_id:appOfficerId,business_id:currentUser?.business_id,branch_id:applicationClient.branch_id,loan_type:loanType,product_id:product.id};
+    const{error}=await sb('loan_applications').insert(rec);
     if(error)throw error;
     await audit('application_created','loan_applications',null,null,rec);
     toast(`Application ${appNo} submitted!`,'success');closeModal();renderApplications();
@@ -3203,12 +3202,14 @@ async function submitApplication(){
 async function viewApplication(id){
   const{data:a}=await sb('loan_applications').select('*').eq('id',id).single();
   if(!a)return;
-  const rate=getAutoRate(a.applied_amount);const tier=getAutoTier(a.applied_amount);
+  const{data:product}=a.product_id?await sb('loan_products').select('name,interest_rate,interest_period').eq('id',a.product_id).eq('business_id',currentUser.business_id).maybeSingle():{data:null};
+  const rate=product?.interest_rate??getAutoRate(a.applied_amount);
+  const tier=product?.name||getAutoTier(a.applied_amount);
   openModal(`
     <h2>Application ${a.application_no||'DRAFT'}</h2>
     <div style="margin-bottom:12px">${statusBadge(a.status)} <span class="badge badge-blue">${tier}</span></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
-      <p><strong>Amount:</strong> ${fmtMoney(a.applied_amount)}</p><p><strong>Rate:</strong> ${rate}% / week</p>
+      <p><strong>Amount:</strong> ${fmtMoney(a.applied_amount)}</p><p><strong>Rate:</strong> ${rate}% / ${product?.interest_period||'week'}</p>
       <p><strong>Term:</strong> ${a.applied_term_weeks} weeks</p><p><strong>Date:</strong> ${fmtDate(a.created_at)}</p>
       <p><strong>Purpose:</strong> ${a.purpose||'-'}</p>
       <p><strong>Guarantor:</strong> On file from client registration</p>
@@ -3253,7 +3254,7 @@ async function rejectApp(id){
 async function renderDisbursement(){
   const main=$('#mainContent');
   try{
-    let appsQuery=sb('loan_applications').select('*,loan_clients:loan_clients!loan_applications_client_id_fkey(full_name,phone)').eq('business_id', currentUser.business_id).eq('status','approved').order('approved_at',{ascending:false});
+    let appsQuery=sb('loan_applications').select('*,loan_clients:loan_clients!loan_applications_client_id_fkey(full_name,phone),loan_products:loan_products!nyilora_application_product_fk(name)').eq('business_id', currentUser.business_id).eq('status','approved').order('approved_at',{ascending:false});
     let loansQuery=sb('loans').select('id,client_id,loan_no,outstanding_balance').eq('business_id',currentUser.business_id).eq('status','active').gt('outstanding_balance',0.01);
     if(selectedBranchId){appsQuery=appsQuery.eq('branch_id',selectedBranchId);loansQuery=loansQuery.eq('branch_id',selectedBranchId)}
     const[{data:apps,error:appsError},{data:activeLoans,error:loansError}]=await Promise.all([appsQuery,loansQuery]);
@@ -3266,7 +3267,7 @@ async function renderDisbursement(){
       <div class="page-header"><h1>Disbursement</h1></div>
       ${hiddenRunning?`<div class="card" style="margin-bottom:12px;border-color:var(--accent-green);background:rgba(5,150,105,.07);font-size:13px"><strong>${hiddenRunning}</strong> already-running approved application${hiddenRunning!==1?'s':''} hidden from this queue. Their clients already have active unpaid loans.</div>`:''}
       <div class="table-wrap"><table><thead><tr><th>App #</th><th>Client Name</th><th>Phone</th><th>Amount</th><th>Term</th><th>Tier</th><th>Approved</th><th>Actions</th></tr></thead><tbody>
-      ${queue.map(a=>`<tr><td>${a.application_no}</td><td><strong>${a.loan_clients?.full_name||'—'}</strong></td><td>${a.loan_clients?.phone||'-'}</td><td>${fmtMoney(a.applied_amount)}</td><td>${a.applied_term_weeks}w</td><td><span class="badge badge-blue">${getAutoTier(a.applied_amount)}</span></td><td>${fmtDate(a.approved_at)}</td><td><button class="btn btn-primary btn-sm" onclick="openDisburseModal('${a.id}')">Disburse</button></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-secondary)">No approved applications awaiting disbursement</td></tr>'}
+      ${queue.map(a=>`<tr><td>${a.application_no}</td><td><strong>${a.loan_clients?.full_name||'—'}</strong></td><td>${a.loan_clients?.phone||'-'}</td><td>${fmtMoney(a.applied_amount)}</td><td>${a.applied_term_weeks}w</td><td><span class="badge badge-blue">${escapeHtml(a.loan_products?.name||getAutoTier(a.applied_amount))}</span></td><td>${fmtDate(a.approved_at)}</td><td><button class="btn btn-primary btn-sm" onclick="openDisburseModal('${a.id}')">Disburse</button></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-secondary)">No approved applications awaiting disbursement</td></tr>'}
       </tbody></table></div>
     `;
   }catch(e){main.innerHTML=`<div class="empty-state"><p>Could not load disbursements: ${escapeHtml(e.message)}</p></div>`;toast(e.message,'error')}
@@ -3277,7 +3278,13 @@ async function openDisburseModal(appId){
   if(appError)return toast(appError.message,'error');
   if(!app)return toast('Application not found','error');
   const amt=app.applied_amount;
-  const rate=getAutoRate(amt);
+  const{data:product,error:productError}=await sb('loan_products').select('*')
+    .eq('id',app.product_id||'00000000-0000-0000-0000-000000000000')
+    .eq('business_id',currentUser.business_id).maybeSingle();
+  if(productError)return toast(productError.message,'error');
+  if(!nyiloraProductEligible(product,amt,Number(app.applied_term_weeks)))
+    return toast('This application needs an eligible loan product before disbursement. Ask an administrator to review it.','error');
+  const rate=Number(product.interest_rate);
   const procFee=PROCESSING_FEE_FLAT;
   // Check returning client BEFORE rendering preview so reg fee shows correctly
   const{data:prevLoans}=await sb('loans').select('id').eq('client_id',app.client_id).eq('business_id',currentUser?.business_id).limit(2);
@@ -3292,7 +3299,7 @@ async function openDisburseModal(appId){
     <h2>Disburse Loan — ${app.application_no}</h2>
     <div class="card" style="margin-bottom:12px;font-size:13px;background:rgba(59,130,246,0.08);border-color:rgba(59,130,246,0.3)">
       <p style="font-size:15px;font-weight:700;margin-bottom:4px">👤 ${clientName}</p>
-      <p style="color:var(--text-secondary)">${clientPhone} &nbsp;|&nbsp; <strong>Tier:</strong> ${getAutoTier(amt)} | <strong>Rate:</strong> ${rate}% / week | <strong>Term:</strong> ${app.applied_term_weeks} weeks</p>
+      <p style="color:var(--text-secondary)">${clientPhone} &nbsp;|&nbsp; <strong>Product:</strong> ${escapeHtml(product.name)} | <strong>Rate:</strong> ${rate}% / week | <strong>Term:</strong> ${app.applied_term_weeks} weeks</p>
     </div>
     <div class="form-row"><div class="form-group"><label>Disbursed Amount</label><input class="input" type="number" id="dAmt" value="${amt}"></div><div class="form-group"><label>Disbursement Method</label><select class="select" id="dMethod"><option value="cash">Cash</option><option value="mpesa" selected>M-Pesa</option><option value="bank_transfer">Bank Transfer</option></select></div></div>
     <div class="form-row"><div class="form-group"><label>Reference / Txn Code</label><input class="input" id="dRef"></div><div class="form-group"><label>Disbursement Date</label><input class="input" type="date" id="dDate" value="${today()}"></div></div>
@@ -3316,7 +3323,7 @@ async function confirmDisburse(appId,clientId,termWeeks){
   if(btn) { btn.disabled = true; btn.textContent = 'Processing...'; }
   try{
     const {data: appCheck,error:appCheckErr} = await sb('loan_applications')
-      .select('status,client_id,business_id,branch_id,applied_term_weeks')
+      .select('status,client_id,business_id,branch_id,applied_term_weeks,product_id')
       .eq('id',appId)
       .eq('business_id',currentUser?.business_id)
       .single();
@@ -3370,7 +3377,13 @@ async function confirmDisburse(appId,clientId,termWeeks){
     }
 
     const amt=Number($('#dAmt').value);const term=Number(termWeeks);
-    const rate=getAutoRate(amt);
+    const{data:product,error:productError}=await sb('loan_products').select('*')
+      .eq('id',appCheck.product_id||'00000000-0000-0000-0000-000000000000')
+      .eq('business_id',currentUser.business_id).maybeSingle();
+    if(productError)throw productError;
+    if(!nyiloraProductEligible(product,amt,term))
+      throw new Error('The selected loan product does not allow this amount or term. Review the application before disbursement.');
+    const rate=Number(product.interest_rate);
     const c=calcLoan(amt,rate,'flat',term);
     const procFee=PROCESSING_FEE_FLAT;
     // Check if this client already has a previous loan — registration is one-time only
@@ -3410,7 +3423,7 @@ async function confirmDisburse(appId,clientId,termWeeks){
       if(branchError)throw branchError;
     }
     // Full principal is disbursed; automatic fee diversion is disabled.
-    const loanRec={loan_no:loanNo,application_id:appId,client_id:clientId,loan_officer_id:disbOfficerId,principal_amount:amt,interest_rate:rate,interest_type:'flat',term_weeks:term,processing_fee:procFee,processing_fee_paid:0,registration_fee_due:0,registration_fee_paid:0,total_interest:c.totalInterest,total_payable:c.totalPayable,weekly_installment:c.weekly,disbursed_amount:amt,disbursement_method:$('#dMethod').value,disbursement_reference:$('#dRef').value,disbursement_date:disbDate,first_repayment_date:firstRep,maturity_date:localISODate(maturity),status:'active',outstanding_balance:c.totalPayable,total_paid:0,arrears_amount:0,overdue_days:0,business_id:currentUser?.business_id,branch_id:disbClient.branch_id,loan_type:disbLoanType};
+    const loanRec={loan_no:loanNo,application_id:appId,client_id:clientId,loan_officer_id:disbOfficerId,product_id:product.id,principal_amount:amt,interest_rate:rate,interest_type:'flat',term_weeks:term,processing_fee:procFee,processing_fee_paid:0,registration_fee_due:0,registration_fee_paid:0,total_interest:c.totalInterest,total_payable:c.totalPayable,weekly_installment:c.weekly,disbursed_amount:amt,disbursement_method:$('#dMethod').value,disbursement_reference:$('#dRef').value,disbursement_date:disbDate,first_repayment_date:firstRep,maturity_date:localISODate(maturity),status:'active',outstanding_balance:c.totalPayable,total_paid:0,arrears_amount:0,overdue_days:0,business_id:currentUser?.business_id,branch_id:disbClient.branch_id,loan_type:disbLoanType};
 
     // Guard: if loan_type column doesn't exist yet in DB, retry without it
     let{data:loan,error:lErr}=await sb('loans').insert(loanRec).select().single();

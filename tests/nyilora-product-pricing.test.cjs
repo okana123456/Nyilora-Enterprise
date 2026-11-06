@@ -1,0 +1,20 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+const html=fs.readFileSync(require('node:path').join(__dirname,'..','index.html'),'utf8');
+const calculation=html.slice(html.indexOf('function calcFlat('),html.indexOf('// ═══ REGISTRATION FEE'));
+const eligibility=html.slice(html.indexOf('function nyiloraProductEligible('),html.indexOf('function nyiloraSelectedApplicationProduct('));
+assert(calculation.includes('function calcFlat('));
+assert(eligibility.includes('function nyiloraProductEligible('));
+const context=vm.createContext({});
+vm.runInContext(calculation+'\n'+eligibility,context);
+const superWima={min_amount:3000,max_amount:4000,min_term_weeks:1,max_term_weeks:4,
+  interest_rate:6.25,interest_period:'weekly',interest_type:'flat',is_active:true};
+assert.equal(context.nyiloraProductEligible(superWima,4000,4),true);
+assert.equal(context.nyiloraProductEligible(superWima,5000,4),false);
+assert.equal(context.nyiloraProductEligible(superWima,4000,5),false);
+const quote=context.calcLoan(4000,superWima.interest_rate,'flat',4);
+assert.equal(quote.totalInterest,1000);
+assert.equal(quote.totalPayable,5000);
+assert.equal(quote.weekly,1250);
+console.log('PASS: Super Wima eligibility and four-week KES 4,000 price');
