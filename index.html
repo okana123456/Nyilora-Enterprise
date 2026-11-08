@@ -3708,11 +3708,34 @@ async function openEditLoanModal(id){
       </select>
     </div>
     <div class="form-group"><label>Reason for edit</label><textarea class="textarea" id="elReason" placeholder="e.g. Maturity date correction, balance adjustment after verification..."></textarea></div>
+    <div class="form-group" style="border-top:1px solid var(--border);padding-top:14px"><label>Restructure repayment term (weeks)</label><input class="input" type="number" id="elNewTerm" min="1" max="52" value="${loan.term_weeks}"><small>Use the Restructure button to recalculate interest and every installment. The product's original maximum does not limit an approved extension. This action is available before the first payment or penalty.</small></div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-outline" id="elRestructureButton" onclick="restructureLoan('${id}')">Restructure Term</button>
       <button class="btn btn-primary" onclick="saveEditLoan('${id}')">Save Changes</button>
     </div>
   `);
+}
+
+async function restructureLoan(id){
+  const weeks=Number($('#elNewTerm')?.value);
+  const reason=$('#elReason')?.value?.trim();
+  if(!Number.isInteger(weeks)||weeks<1||weeks>52)return toast('Enter a term from 1 to 52 weeks','error');
+  if(!reason)return toast('Enter the reason for restructuring','error');
+  const button=$('#elRestructureButton');
+  if(button)button.disabled=true;
+  try{
+    const{data,error}=await supabaseClient.rpc('nyilora_restructure_loan_term',{
+      p_loan_id:id,p_new_weeks:weeks,p_reason:reason
+    });
+    if(error)throw error;
+    cachedData.loans=null;
+    await loadNyiloraTables(['loans','loan_schedules','loan_applications'],{force:true});
+    toast(`Loan restructured to ${weeks} weeks; new total ${fmtMoney(data.total_payable)}`,'success');
+    closeModal();
+    await renderLoans();
+  }catch(e){toast('Could not restructure loan: '+e.message,'error');}
+  finally{if(button)button.disabled=false;}
 }
 
 async function saveEditLoan(id){
