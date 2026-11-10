@@ -5964,16 +5964,18 @@ async function renderExcessCharges(){
     const availableTotal=allExcess.reduce((s,r)=>s+Number(r.amount_available||0),0);
     const pendingCharges=allCharges.filter(r=>['pending','partially_paid'].includes(r.status));
     const chargesOutstanding=pendingCharges.reduce((s,r)=>s+Math.max(0,Number(r.amount||0)-Number(r.amount_paid||0)),0);
+    const processingFeesPaid=allCharges.filter(r=>r.charge_type==='processing_fee').reduce((s,r)=>s+Number(r.amount_paid||0),0);
     const settledThisMonth=allocations.filter(a=>String(a.created_at||'').slice(0,7)===today().slice(0,7)).reduce((s,a)=>s+Number(a.amount||0),0);
 
     main.innerHTML=`
       <div class="page-header" style="align-items:flex-start;flex-wrap:wrap;gap:10px">
-        <div><h1>Excess & Charges</h1><p style="font-size:12px;color:var(--text-secondary);margin-top:4px">Future transactions only. Existing loan balances and historical repayments are not changed.</p></div>
+        <div><h1>Excess & Charges</h1><p style="font-size:12px;color:var(--text-secondary);margin-top:4px">Same-loan excess applied to processing fees appears in the charge ledger below. Original repayments and loan balances remain unchanged.</p></div>
         <button class="btn btn-primary btn-sm" onclick="openAddChargeModal()">+ Add Charge</button>
       </div>
       <div class="kpi-grid" style="margin-bottom:14px">
         <div class="kpi-card"><div class="kpi-label">Available Excess</div><div class="kpi-value" style="color:var(--accent-green)">${fmtMoney(availableTotal)}</div></div>
         <div class="kpi-card"><div class="kpi-label">Open Charges</div><div class="kpi-value" style="color:var(--accent-yellow)">${fmtMoney(chargesOutstanding)}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Processing Fees Paid</div><div class="kpi-value" style="color:var(--accent-green)">${fmtMoney(processingFeesPaid)}</div><div class="kpi-sub">Recorded in the charge ledger</div></div>
         <div class="kpi-card"><div class="kpi-label">Pending Charge Records</div><div class="kpi-value">${pendingCharges.length}</div></div>
         <div class="kpi-card"><div class="kpi-label">Resolved This Month</div><div class="kpi-value">${fmtMoney(settledThisMonth)}</div></div>
       </div>
