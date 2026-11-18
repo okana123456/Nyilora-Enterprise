@@ -4762,10 +4762,20 @@ function exportRepaymentsExcel(){
 }
 
 // ═══ ARREARS REPORT (formerly Overdue) ═══
+function arrearsLoansForOfficer(loans,officerId){
+  return officerId?loans.filter(l=>canonicalLoanOfficerId(l.loan_officer_id)===officerId):loans;
+}
+function applyArrearsFilters(){
+  renderOverdue({
+    asOfDate:document.getElementById('arrearsAsOfDate')?.value||today(),
+    minDays:document.getElementById('arrearsMinDays')?.value||'1',
+    officerId:document.getElementById('arrearsOfficer')?.value||''
+  });
+}
 async function renderOverdue(opts){
   // opts can be: undefined, a minDays number (legacy), or {asOfDate, minDays}
   let asOfDate, minDays=1;
-  if(opts && typeof opts==='object'){ asOfDate=opts.asOfDate; minDays=parseInt(opts.minDays??1)||1; }
+  if(opts && typeof opts==='object'){ asOfDate=opts.asOfDate; minDays=Number(opts.minDays??1); }
   else if(opts!==undefined){ minDays=parseInt(opts)||1; }
   const todayStr=today();
   asOfDate=asOfDate||todayStr;
@@ -4780,20 +4790,23 @@ async function renderOverdue(opts){
     await loadNyiloraTables(['loan_clients','loans','loan_schedules','loan_staff']);
     let loans = (cachedData.loans||[]).filter(l=>l.status==='active');
     if(isOfficerOnly) loans = loans.filter(l=>canonicalLoanOfficerId(l.loan_officer_id) === currentUser.id);
+    const availableOfficerIds=new Set(loans.map(l=>canonicalLoanOfficerId(l.loan_officer_id)).filter(Boolean));
+    const requestedOfficerId=isOfficerOnly?currentUser.id:String(opts?.officerId||'');
+    const officerId=availableOfficerIds.has(requestedOfficerId)?requestedOfficerId:'';
+    loans=arrearsLoansForOfficer(loans,officerId);
     loans.sort((a,b)=>Number(b.overdue_days||0)-Number(a.overdue_days||0));
     const staffList = cachedData.staff || [];
+    const officerName=staffList.find(s=>s.id===officerId)?.name||'All Officers';
+    const officerOptions=staffList.filter(s=>availableOfficerIds.has(s.id))
+      .sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
 
     // Populate global staff map so buildDueTodayTable / buildDuesTable can also use it
     window._staffMap = {};
     (staffList||[]).forEach(s=>{ window._staffMap[s.id]=s.name; });
 
-    // Populate cachedData.loans with the loans visible to this user (officer-scoped
-    // if applicable) so the dues date-picker (loadArrearsDues) always has data to
-    // work with — fixes "forecast date shows no clients" when the dashboard
-    // hasn't been visited yet, and ensures officers only see their own clients
-    // in the dues forecast too.
-    cachedData = cachedData || {};
-    cachedData.loans = loans || [];
+    // Keep the filtered loans for the dues date picker without replacing the
+    // shared cache; switching officers must still be able to load every portfolio.
+    window._overdueVisibleLoans=loans;
 
     const loanIds=(loans||[]).map(l=>l.id);
     const loanIdSet = new Set(loanIds);
@@ -4895,7 +4908,7 @@ async function renderOverdue(opts){
       return{loan,s,remaining,paid:Number(s.total_paid||0),arrears};
     }).filter(Boolean).sort((a,b)=>b.remaining-a.remaining);
 
-    window._overdueSnapshot={asOfDate,overdueLoans,missedRows,dueRows};
+    window._overdueSnapshot={asOfDate,overdueLoans,missedRows,dueRows,officerId,officerName};
 
     // ── Build arrears page using safe string concatenation (no nested backticks) ──
     function makeSection(id, title, count, amtStr, bodyHtml, btnHtml){
@@ -5032,11 +5045,11 @@ async function renderOverdue(opts){
         '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;width:100%">' +
           '<div style="display:flex;align-items:center;gap:6px">' +
             '<span style="font-size:12px;color:var(--text-secondary);white-space:nowrap">As of date:</span>' +
-            '<input type="date" class="input" style="width:150px;padding:4px 8px;font-size:12px" value="'+asOfDate+'" onchange="renderOverdue({asOfDate:this.value,minDays:document.getElementById(\'arrearsMinDays\')?.value||0})">' +
+            '<input type="date" id="arrearsAsOfDate" class="input" style="width:150px;padding:4px 8px;font-size:12px" value="'+asOfDate+'" onchange="applyArrearsFilters()">' +
           '</div>' +
           '<div style="display:flex;align-items:center;gap:6px">' +
             '<span style="font-size:12px;color:var(--text-secondary);white-space:nowrap">Min days:</span>' +
-            '<select id="arrearsMinDays" class="select" style="width:auto;padding:4px 8px;font-size:12px" onchange="renderOverdue({asOfDate:document.querySelector(\'input[type=date]\')?.value||\''+asOfDate+'\',minDays:this.value})">' +
+            '<select id="arrearsMinDays" class="select" style="width:auto;padding:4px 8px;font-size:12px" onchange="applyArrearsFilters()">' +
               '<option value="0" '+(minDays===0?'selected':'')+'>All (0+ days)</option>' +
               '<option value="1" '+(minDays===1?'selected':'')+'>1+ days (default)</option>' +
               '<option value="7" '+(minDays===7?'selected':'')+'>7+ days</option>' +
@@ -5047,6 +5060,7 @@ async function renderOverdue(opts){
               '<option value="180" '+(minDays===180?'selected':'')+'>180+ days (NPL)</option>' +
             '</select>' +
           '</div>' +
+          (!isOfficerOnly?'<div style="display:flex;align-items:center;gap:6px"><span style="font-size:12px;color:var(--text-secondary)">Officer:</span><select id="arrearsOfficer" class="select" style="width:auto;max-width:220px;padding:4px 8px;font-size:12px" onchange="applyArrearsFilters()"><option value="">All officers</option>'+officerOptions.map(s=>'<option value="'+escapeHtml(s.id)+'" '+(s.id===officerId?'selected':'')+'>'+escapeHtml(s.name||s.email||s.id)+'</option>').join('')+'</select></div>':'') +
           '<span class="badge badge-red">'+overdueLoans.length+' loan'+(overdueLoans.length!==1?'s':'')+' &nbsp;·&nbsp; KES '+fmtMoney(totalArrears)+' in arrears</span>' +
           '<span class="badge badge-red">NPL: '+nplLoans.length+' &nbsp;·&nbsp; KES '+fmtMoney(nplOutstanding)+' OLB</span>' +
         '</div>' +
@@ -5131,11 +5145,9 @@ async function loadArrearsDues(startDate, endDate){
   if(!endDate) endDate = startDate; // fallback for single-date calls
 
   // Only active loans — completed loans must never appear in arrears dues.
-  // cachedData.loans is populated by renderOverdue (officer-scoped if applicable),
-  // so this map is always available and correctly scoped — even on a
-  // forecast/future date and without visiting the dashboard first.
+  // Use the officer-scoped snapshot from renderOverdue for forecasts too.
   const activeLoanMap={};
-  (cachedData.loans||[]).filter(l=>l.status==='active').forEach(l=>{activeLoanMap[l.id]=l;});
+  (window._overdueVisibleLoans||[]).filter(l=>l.status==='active').forEach(l=>{activeLoanMap[l.id]=l;});
 
   const arrearsCutoff=endDate<today()?endDate:today();
   const visibleSchedules=(cachedData.schedules||[]).filter(s=>!!activeLoanMap[s.loan_id]);
@@ -5181,6 +5193,10 @@ async function loadArrearsDues(startDate, endDate){
   if(icon){ icon.style.transform='rotate(180deg)'; }
 }
 
+function officerExportTag(snapshot){
+  return String(snapshot.officerId?snapshot.officerName:'All_Officers')
+    .trim().replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,50)||'Officer';
+}
 function downloadDuesExcel(){
   const snap=window._overdueSnapshot;
   if(!snap){toast('No data to download','error');return;}
@@ -5210,7 +5226,7 @@ function downloadDuesExcel(){
   }));
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(sheet),sheetLabel);
-  XLSX.writeFile(wb,'Dues_'+fileLabel+'.xlsx');
+  XLSX.writeFile(wb,'Dues_'+officerExportTag(snap)+'_'+fileLabel+'.xlsx');
   toast('Dues report downloaded!','success');
 }
 
@@ -5235,7 +5251,7 @@ function downloadMissedExcel(){
   }));
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(sheet),'Missed Installments');
-  XLSX.writeFile(wb,'Missed_Installments_'+asOfDate+'.xlsx');
+  XLSX.writeFile(wb,'Missed_Installments_'+officerExportTag(snap)+'_'+asOfDate+'.xlsx');
   toast('Missed installments report downloaded!','success');
 }
 
@@ -5257,7 +5273,7 @@ function downloadArrearsSummaryExcel(){
   }));
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(sheet),'Loan Arrears Summary');
-  XLSX.writeFile(wb,'Arrears_Summary_'+asOfDate+'.xlsx');
+  XLSX.writeFile(wb,'Arrears_Summary_'+officerExportTag(snap)+'_'+asOfDate+'.xlsx');
   toast('Loan arrears summary downloaded!','success');
 }
 
