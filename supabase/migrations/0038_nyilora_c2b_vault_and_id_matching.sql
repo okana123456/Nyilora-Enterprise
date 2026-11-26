@@ -40,7 +40,7 @@ begin
   foreach v_kind in array array['consumer_key', 'consumer_secret'] loop
     v_name := 'nyilora.c2b.' || p_business_id || '.' || v_kind;
     v_value := case when v_kind = 'consumer_key' then trim(p_consumer_key) else trim(p_consumer_secret) end;
-    select id into v_id from vault.secrets where name = v_name for update;
+    select id into v_id from vault.secrets where name = v_name;
     if v_id is null then
       perform vault.create_secret(v_value, v_name, 'Nyilora C2B ' || v_kind || ' for ' || p_business_id);
     else

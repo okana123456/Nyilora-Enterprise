@@ -166,6 +166,9 @@ async function main() {
   assert.match(sql, /c\.business_id = p_business_id/);
   assert.match(sql, /c\.id_number/);
   assert.match(sql, /to service_role/);
+  assert.doesNotMatch(sql, /from vault\.secrets[^;]*for update/i);
+  const vaultFix = fs.readFileSync('supabase/migrations/0039_nyilora_c2b_vault_write_fix.sql', 'utf8');
+  assert.doesNotMatch(vaultFix, /from vault\.secrets[^;]*for update/i);
   console.log('PASS: Nyilora admin credential storage, callback registration, token check and ID matching boundary');
 }
 

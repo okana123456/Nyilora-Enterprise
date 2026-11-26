@@ -9,6 +9,8 @@ This applies only to the Nyilora Supabase project `sedzaagjqfsoxglcwyed`. It hos
 3. Deploy `payment-callback` with **Verify JWT disabled** so Safaricom can call it. The callback still checks its private verification token. The repository's `supabase/config.toml` declares these settings for CLI deployments.
 4. Publish the updated website.
 
+If you already ran an earlier copy of migration 0038 and Settings cannot save the key pair, run `supabase/migrations/0039_nyilora_c2b_vault_write_fix.sql` once. Then retry **Save Settings**. The fix does not delete or reveal credentials.
+
 No consumer key, consumer secret, or callback token needs to be added manually under Edge Function Secrets. The two consumer credentials are saved through Nyilora Settings in Supabase Vault. The callback token is generated privately by the SQL installation. Existing `SERVICE_*` secrets for the platform's separate billing and SMS payments remain separate.
 
 ## Set up each company's Paybill

@@ -7744,6 +7744,16 @@ async function loadC2bCredentialStatus(){
   }catch(e){status.textContent='Could not check saved credentials. Deploy the Nyilora C2B settings function.';}
 }
 
+async function nyiloraFunctionError(error,fallback){
+  const response=error?.context;
+  if(response&&typeof response.clone==='function'){
+    const body=await response.clone().json().catch(()=>null);
+    if(body?.message&&typeof body.message==='string')return new Error(body.message);
+    if(response.status)return new Error(`${fallback} (HTTP ${response.status}).`);
+  }
+  return new Error(fallback);
+}
+
 async function saveSettings(){
   try{
     const shortcode = $('#setShortcode').value.trim();
@@ -7774,7 +7784,8 @@ async function saveSettings(){
     await audit('settings_changed','loan_settings',null,null,rec);
     if(consumerKey&&consumerSecret){
       const{data,error}=await supabaseClient.functions.invoke('nyilora-c2b-settings',{body:{action:'save',consumer_key:consumerKey,consumer_secret:consumerSecret}});
-      if(error||!data?.ok)throw new Error(data?.message||'Company settings saved, but Daraja credentials could not be saved. Please try again.');
+      if(error)throw await nyiloraFunctionError(error,'Company settings saved, but Daraja credentials could not be saved');
+      if(!data?.ok)throw new Error(data?.message||'Company settings saved, but Daraja credentials could not be saved. Please try again.');
       $('#setC2bConsumerKey').value='';
       $('#setC2bConsumerSecret').value='';
       loadC2bCredentialStatus();
