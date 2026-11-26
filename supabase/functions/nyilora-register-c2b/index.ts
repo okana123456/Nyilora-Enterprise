@@ -15,12 +15,6 @@ function json(body: Record<string, unknown>, status = 200) {
   });
 }
 
-function credential(name: string, businessId: string) {
-  const suffix = businessId.replace(/^BIZ-/i, "").replace(/[^a-z0-9]/gi, "_").toUpperCase();
-  return (Deno.env.get(`${name}__${suffix}`) ||
-    (businessId === "BIZ-NYILORA" ? Deno.env.get(name) : "") || "").trim();
-}
-
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ ok: false, message: "Use POST." }, 405);
@@ -61,11 +55,15 @@ serve(async (req) => {
     if (!["sandbox", "production"].includes(mode)) {
       return json({ ok: false, message: "Choose Sandbox or Production in Settings." }, 400);
     }
-    const consumerKey = credential("NYILORA_C2B_CONSUMER_KEY", staff.business_id);
-    const consumerSecret = credential("NYILORA_C2B_CONSUMER_SECRET", staff.business_id);
-    const callbackToken = (Deno.env.get("NYILORA_C2B_CALLBACK_TOKEN") || "").trim();
+    const { data: credentials, error: credentialsError } = await supabase.rpc(
+      "nyilora_get_c2b_credentials", { p_business_id: staff.business_id },
+    );
+    if (credentialsError) throw credentialsError;
+    const consumerKey = String(credentials?.consumer_key || "");
+    const consumerSecret = String(credentials?.consumer_secret || "");
+    const callbackToken = String(credentials?.callback_token || "");
     if (!consumerKey || !consumerSecret || callbackToken.length < 32) {
-      return json({ ok: false, message: "Add this company's C2B API credentials and the 32-character callback token to Nyilora Supabase secrets." }, 503);
+      return json({ ok: false, message: "Save this company's Daraja consumer key and secret in Settings first." }, 400);
     }
 
     const baseUrl = mode === "sandbox" ? "https://sandbox.safaricom.co.ke" : "https://api.safaricom.co.ke";

@@ -78,13 +78,19 @@ serve(async (req) => {
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
   const projectUrl = Deno.env.get("SUPABASE_URL") || "";
-  if (!projectUrl || new URL(projectUrl).host !== "sedzaagjqfsoxglcwyed.supabase.co") {
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  if (!projectUrl || new URL(projectUrl).host !== "sedzaagjqfsoxglcwyed.supabase.co" || !serviceKey) {
     return new Response("Wrong Supabase project", { status: 503 });
   }
-  const callbackToken = (Deno.env.get("NYILORA_C2B_CALLBACK_TOKEN") || "").trim();
-  if (callbackToken.length < 32) return new Response("Callback not configured", { status: 503 });
   const requestUrl = new URL(req.url);
-  if (!sameToken(requestUrl.searchParams.get("token") || "", callbackToken)) {
+  const suppliedToken = requestUrl.searchParams.get("token") || "";
+  if (suppliedToken.length < 32) return new Response("Forbidden", { status: 403 });
+  const supabase = createClient(projectUrl, serviceKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: callbackToken, error: tokenError } = await supabase.rpc("nyilora_get_c2b_callback_token");
+  if (tokenError) return new Response("Callback not configured", { status: 503 });
+  if (String(callbackToken || "").length < 32 || !sameToken(suppliedToken, String(callbackToken))) {
     return new Response("Forbidden", { status: 403 });
   }
 
@@ -114,9 +120,8 @@ serve(async (req) => {
 
     if (!shortcode || !amount || amount <= 0) return accepted;
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const supabaseUrl = projectUrl;
+    const supabaseKey = serviceKey;
 
     const { data: allSettingsRows, error: settingsError } = await supabase
       .from("loan_settings")
@@ -187,15 +192,15 @@ serve(async (req) => {
     }
 
     let client: { id: string; business_id: string; full_name: string | null; account_credit?: number | null } | null = null;
-    // Nyilora uses the borrower's registered PHONE in the Paybill account field.
-    // The sender phone is never used to infer the borrower. Short references,
-    // shared phone numbers and explicitly held payments remain in suspense.
+    // The Paybill account field is the borrower's registered national ID.
+    // The sender phone is never used to infer the borrower. Missing or
+    // ambiguous IDs remain in suspense for staff review.
     let clientLookupError: unknown = null;
     const accountDigits = digitsOnly(accountNumber);
-    if (accountDigits.length >= 5 && accountDigits.length <= 12) {
+    if (accountDigits.length >= 5 && accountDigits.length <= 20) {
       const accountMatches: Array<{ id: string; business_id: string; full_name: string | null; account_credit?: number | null }> = [];
       for (const candidateBusiness of configuredBusinesses) {
-        const { data, error } = await supabase.rpc("nyilora_callback_phone_candidates", {
+        const { data, error } = await supabase.rpc("nyilora_callback_id_candidates", {
           p_business_id: candidateBusiness,
           p_account_reference: accountNumber,
           p_transaction_code: transId,
@@ -300,7 +305,7 @@ serve(async (req) => {
       return accepted;
     }
 
-    const { data: loan } = await supabase
+    const { data: activeLoans, error: activeLoansError } = await supabase
       .from("loans")
       .select("id, loan_no, client_id, outstanding_balance, total_paid, total_payable, total_interest, status, business_id, registration_fee_due, registration_fee_paid, processing_fee, processing_fee_paid")
       .eq("business_id", businessId)
@@ -308,8 +313,12 @@ serve(async (req) => {
       .eq("status", "active")
       .gt("outstanding_balance", 0)
       .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(2);
+    if (activeLoansError) throw activeLoansError;
+    // A national ID identifies the borrower, not a particular loan.
+    // Multiple active loans need a staff choice in Suspense.
+    if ((activeLoans || []).length > 1) return accepted;
+    const loan = activeLoans?.[0] || null;
 
     if (!loan) {
       const { data: pendingCharge } = await supabase
@@ -377,7 +386,7 @@ serve(async (req) => {
       return accepted;
     }
 
-    // Every payment made using the client's registered phone reduces the loan
+    // Every payment made using the client's registered ID reduces the loan
     // in full. Registration and processing fees are never diverted here.
     const registrationFeePortion = 0;
     const processingFeePortion = 0;

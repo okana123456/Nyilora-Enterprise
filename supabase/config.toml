@@ -1,6 +1,9 @@
 [functions.nyilora-register-c2b]
 verify_jwt = true
 
+[functions.nyilora-c2b-settings]
+verify_jwt = true
+
 [functions.payment-callback]
 verify_jwt = false
 

@@ -3312,7 +3312,7 @@ async function openDisburseModal(appId){
         :`<p style="font-size:11px;color:var(--accent-green)">✅ No registration fee — returning client (${(prevLoans||[]).length} previous loan${(prevLoans||[]).length!==1?'s':''})</p>`}
       <hr style="border:none;border-top:1px solid var(--border);margin:6px 0">
       <p style="display:flex;justify-content:space-between;font-size:15px"><span><strong>Net Disbursement</strong></span><strong style="color:var(--accent-green)">${fmtMoney(amt)}</strong></p>
-      <p style="font-size:10px;color:var(--text-secondary);margin-top:4px">Every repayment made using the registered phone number reduces the loan balance in full. Fees are not deducted from repayments.</p>
+      <p style="font-size:10px;color:var(--text-secondary);margin-top:4px">Every Paybill repayment using the client's registered national ID number reduces the loan balance in full. Fees are not deducted from repayments.</p>
     </div>
     <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="btnConfirmDisburse" onclick="confirmDisburse('${appId}','${app.client_id}','${app.applied_term_weeks}')">Confirm & Disburse</button></div>
   `,true);
@@ -4165,7 +4165,7 @@ async function renderRepayments(page=1){
       </div>
       ${myQueue.length>0?`<div class="card" style="margin-bottom:16px;border-color:var(--accent-yellow)"><h3 style="font-size:14px;margin-bottom:8px;color:var(--accent-yellow)">Pending M-Pesa Confirmations (${myQueue.length})</h3>
         <div class="table-wrap"><table><thead><tr><th>Trans ID</th><th>Amount</th><th>Phone</th><th>Account Ref</th><th>Time</th><th>Actions</th></tr></thead><tbody>
-        ${myQueue.map(q=>`<tr><td>${escapeHtml(q.trans_id||'-')}</td><td>${fmtMoney(q.trans_amount)}</td><td>${paymentPhoneHtml(q)}</td><td>${escapeHtml(q.bill_ref_number||'-')}</td><td>${fmtDateTime(q.created_at)}</td><td>${canPay?`<button class="btn btn-success btn-sm" onclick="confirmMpesaPayment('${q.id}','${q.msisdn||q.bill_ref_number||''}',${q.trans_amount},'${q.trans_id}')">Confirm</button> <button class="btn btn-outline btn-sm" onclick="dismissMpesaPayment('${q.id}')">Dismiss</button>`:''}</td></tr>`).join('')}
+        ${myQueue.map(q=>`<tr><td>${escapeHtml(q.trans_id||'-')}</td><td>${fmtMoney(q.trans_amount)}</td><td>${paymentPhoneHtml(q)}</td><td>${escapeHtml(q.bill_ref_number||'-')}</td><td>${fmtDateTime(q.created_at)}</td><td>${canPay?(q.loan_id?`<button class="btn btn-success btn-sm" onclick="confirmMpesaPayment('${q.id}')">Confirm</button> `:'<span class="badge badge-yellow">Review in Suspense</span> ') + `<button class="btn btn-outline btn-sm" onclick="dismissMpesaPayment('${q.id}')">Dismiss</button>`:''}</td></tr>`).join('')}
         </tbody></table></div></div>`:''}
       <div class="table-wrap"><table><thead><tr><th>Receipt</th><th>Client</th><th>Client Phone</th><th>Sender</th><th>Loan #</th><th>Type</th><th>Reference</th><th>Loan Total</th><th>Repayment</th><th title="Loan balance immediately after this payment">Balance After</th><th>Method</th><th>Date & Time</th><th>Actions</th></tr></thead><tbody>
       ${p.items.map(r=>{
@@ -4226,31 +4226,32 @@ async function renderRepayments(page=1){
   }
 }
 
-async function confirmMpesaPayment(queueId,billRef,amount,transId){
+async function confirmMpesaPayment(queueId){
   try{
-    const {data:queueRow}=await sb('mpesa_callback_queue').select('*').eq('id',queueId).maybeSingle();
-    const refRaw = String(billRef||'').trim();
-    if(!refRaw) return toast('M-Pesa account reference is empty','warning');
-    const phoneRefs = _phoneVariants(refRaw);
-    let client = null;
-    for(const ph of phoneRefs){
-      const{data:byPhone}=await sb('loan_clients').select('id').eq('business_id', currentUser.business_id).eq('phone',ph).maybeSingle();
-      if(byPhone){ client = byPhone; break; }
-    }
-    if(!client && phoneRefs.length){
-      const tails = [...new Set(phoneRefs.map(ph=>ph.replace(/\D/g,'').slice(-9)).filter(Boolean))];
-      for(const tail of tails){
-        if(client) break;
-        const{data:fuzzyPhones}=await sb('loan_clients').select('id,phone').eq('business_id', currentUser.business_id).ilike('phone',`%${tail}`).limit(1);
-        if(fuzzyPhones && fuzzyPhones.length) client = fuzzyPhones[0];
-      }
-    }
-    let loan = null;
-    if(client?.id){
-      const{data:clientLoans}=await sb('loans').select('*').eq('business_id', currentUser.business_id).eq('client_id',client.id).eq('status','active').order('created_at',{ascending:false}).limit(1);
-      if(clientLoans && clientLoans.length) loan = clientLoans[0];
-    }
-    if(!loan)return toast('No matching active loan found for: '+refRaw,'warning');
+    const{data:queueRow,error:queueError}=await sb('mpesa_callback_queue').select('*').eq('id',queueId).eq('business_id',currentUser.business_id).maybeSingle();
+    if(queueError)throw queueError;
+    if(!queueRow||queueRow.confirmed||queueRow.dismissed)throw new Error('This payment is no longer pending.');
+    const refRaw=String(queueRow.bill_ref_number||'').trim();
+    const refDigits=refRaw.replace(/\D/g,'');
+    if(refDigits.length<5||refDigits.length>20||!queueRow.loan_id)throw new Error('Review this payment in Suspense and select the correct loan.');
+    const{data:loan,error:loanError}=await sb('loans').select('*').eq('id',queueRow.loan_id).eq('business_id',currentUser.business_id).eq('status','active').maybeSingle();
+    if(loanError)throw loanError;
+    if(!loan)throw new Error('The suggested loan is no longer active. Review this payment in Suspense.');
+    const{data:client,error:clientError}=await sb('loan_clients').select('id,id_number').eq('id',loan.client_id).eq('business_id',currentUser.business_id).maybeSingle();
+    if(clientError)throw clientError;
+    if(!client||String(client.id_number||'').replace(/\D/g,'')!==refDigits)throw new Error('Paybill account ID does not match the suggested loan client. Review it in Suspense.');
+    const{data:clientLoans,error:clientLoansError}=await sb('loans').select('id').eq('business_id',currentUser.business_id).eq('client_id',client.id).eq('status','active').limit(2);
+    if(clientLoansError)throw clientLoansError;
+    if((clientLoans||[]).length!==1)throw new Error('This client has more than one active loan. Select the correct one in Suspense.');
+    const amount=Number(queueRow.trans_amount||0);
+    const transId=String(queueRow.trans_id||'');
+    if(!transId||!(amount>0))throw new Error('Invalid pending M-Pesa payment.');
+    const{data:existingPayment,error:existingPaymentError}=await sb('loan_repayments').select('id').eq('business_id',currentUser.business_id).eq('payment_reference',transId).limit(1).maybeSingle();
+    if(existingPaymentError)throw existingPaymentError;
+    if(existingPayment)throw new Error('This M-Pesa payment was already recorded.');
+    const{data:existingReceipt,error:existingReceiptError}=await sb('loan_repayments').select('id').eq('business_id',currentUser.business_id).eq('receipt_no',transId).limit(1).maybeSingle();
+    if(existingReceiptError)throw existingReceiptError;
+    if(existingReceipt)throw new Error('This M-Pesa receipt was already recorded.');
     
     const receiptNo = generateUniqueNo('RCP');
     // Dynamic interest/principal split based on loan's actual ratio
@@ -4263,7 +4264,7 @@ async function confirmMpesaPayment(queueId,billRef,amount,transId){
     const allocationText=paymentAllocationText(allocation);
 
     const senderName=[queueRow?.first_name,queueRow?.middle_name,queueRow?.last_name].filter(Boolean).join(' ').trim();
-    const senderPhone=queueRow?.msisdn||queueRow?.payer_phone||refRaw||'';
+    const senderPhone=queueRow?.msisdn||queueRow?.payer_phone||'';
     const rec={loan_id:loan.id,receipt_no:receiptNo,amount,payment_method:'mpesa',payment_reference:transId,payment_date:localDateTime(),sender_name:senderName,sender_phone:senderPhone,principal_portion:mpPrincipalPortion,interest_portion:mpInterestPortion,penalty_portion:0,registration_fee_portion:allocation.registrationFeePortion,processing_fee_portion:allocation.processingFeePortion,loan_portion:allocation.loanPortion,credit_portion:allocation.creditPortion,mpesa_confirmed:true,collected_by:currentUser?.id,business_id:currentUser?.business_id,notes:`M-Pesa C2B confirmed by cashier. Allocation: ${allocationText||'none'}`};
     const{data:repayment,error}=await sb('loan_repayments').insert(rec).select('id').single();
     if(error)throw error;
@@ -4370,7 +4371,7 @@ async function openPaymentModal(loanId){
     ${loanInfo}
     ${!loanId?`<div class="form-group" style="position:relative"><label>Search Loan (by loan no, client name, phone or ID)</label><input class="input" id="payLoanSearch" list="payLoanList" placeholder="Type loan no, name, phone or ID number..." oninput="searchLoanForPay(this.value)" autocomplete="off"><datalist id="payLoanList"></datalist><div id="payLoanResults" style="margin-top:6px;max-height:280px;overflow-y:auto;border-radius:8px"></div></div>`:''}
     <input type="hidden" id="payLoanId" value="${loanId||''}">
-    <div class="form-row"><div class="form-group"><label>Amount *</label><input class="input" type="number" id="payAmount"></div><div class="form-group"><label>Method</label><select class="select" id="payMethod" onchange="onPayMethodChange(this.value)"><option value="cash">Cash</option><option value="mpesa">M-Pesa (Manual)</option><option value="mpesa_c2b">📲 M-Pesa C2B (Daraja — auto)</option><option value="bank_transfer">Bank Transfer</option><option value="cheque">Cheque</option></select></div></div><div class="form-group" id="payDarajaInfoWrap" style="display:none"><div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);padding:10px;border-radius:8px;font-size:12px;line-height:1.5">Client pays via M-Pesa Paybill <strong>${(appSettings&&appSettings.mpesa_shortcode)||'—'}</strong>, using their registered phone number as the account reference. If the transaction is already in Suspense, match it there so it is recorded only once.</div></div>
+    <div class="form-row"><div class="form-group"><label>Amount *</label><input class="input" type="number" id="payAmount"></div><div class="form-group"><label>Method</label><select class="select" id="payMethod" onchange="onPayMethodChange(this.value)"><option value="cash">Cash</option><option value="mpesa">M-Pesa (Manual)</option><option value="mpesa_c2b">📲 M-Pesa C2B (Daraja — auto)</option><option value="bank_transfer">Bank Transfer</option><option value="cheque">Cheque</option></select></div></div><div class="form-group" id="payDarajaInfoWrap" style="display:none"><div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);padding:10px;border-radius:8px;font-size:12px;line-height:1.5">Client pays via M-Pesa Paybill <strong>${(appSettings&&appSettings.mpesa_shortcode)||'—'}</strong>, using their registered national ID number as the account reference. If the transaction is already in Suspense, match it there so it is recorded only once.</div></div>
     <div class="form-row"><div class="form-group"><label>Reference / Txn Code</label><input class="input" id="payRef"></div><div class="form-group"><label>Date</label><input class="input" type="date" id="payDate" value="${today()}"></div></div>
     <div class="form-row"><div class="form-group"><label>Sender Name</label><input class="input" id="paySenderName" placeholder="Name shown on payment message"></div><div class="form-group"><label>Sender Phone</label><input class="input" id="paySenderPhone" placeholder="Phone that sent the payment"></div></div>
     <div class="form-group"><label>Amount applied to Penalty (KES)</label><input class="input" type="number" id="payPenaltyAmt" value="0"></div>
@@ -7677,27 +7678,31 @@ async function renderSettings(){
       </div>
       <div class="card" style="max-width:700px;margin-bottom:16px;border-color:var(--accent-green)">
         <h3 style="font-size:16px;margin-bottom:4px;color:var(--accent-green)">📶 M-Pesa Daraja C2B Settings</h3>
-        <p style="font-size:12px;color:var(--text-secondary);margin-bottom:14px">Save this company's Paybill, then register its callback with Safaricom. Keep automatic allocation off until a small payment reaches Suspense correctly.</p>
+        <p style="font-size:12px;color:var(--text-secondary);margin-bottom:14px">Enter this company's Paybill and Daraja C2B key pair here. The key and secret are stored privately and are never displayed again. Keep automatic allocation off until a small payment reaches Suspense correctly.</p>
         <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">Business ID for this setup: <strong>${escapeHtml(currentUser.business_id)}</strong></p>
         <div class="form-row">
           <div class="form-group"><label>Shortcode (Paybill)</label><input class="input" id="setShortcode" value="${settings.mpesa_shortcode||''}" placeholder="e.g. 174379"></div>
           <div class="form-group"><label>Environment</label><select class="select" id="setDarajaEnv"><option value="sandbox" ${(settings.daraja_environment||'sandbox')==='sandbox'?'selected':''}>Sandbox (Testing)</option><option value="production" ${settings.daraja_environment==='production'?'selected':''}>Production (Live)</option></select></div>
         </div>
-        <p style="font-size:12px;color:var(--text-secondary);margin-bottom:14px">Daraja credentials and the STK passkey belong in Nyilora's private Supabase Edge Function secrets. They are never entered or displayed in this browser.</p>
+        <div class="form-row">
+          <div class="form-group"><label>Daraja consumer key</label><input class="input" id="setC2bConsumerKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="Paste consumer key"></div>
+          <div class="form-group"><label>Daraja consumer secret</label><input class="input" id="setC2bConsumerSecret" type="password" autocomplete="new-password" spellcheck="false" placeholder="Paste consumer secret"></div>
+        </div>
+        <p id="setC2bCredentialStatus" style="font-size:12px;color:var(--text-secondary);margin-bottom:14px">Checking whether C2B credentials are saved…</p>
         <div class="form-group">
-          <label>Nyilora C2B receiver (registration adds a private token)</label>
+          <label>C2B callback endpoint</label>
           <div style="display:flex;gap:6px">
             <input class="input" id="setCallbackUrl" value="${callbackUrl}" readonly style="opacity:0.7">
           </div>
-          <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">This endpoint belongs to Nyilora's Supabase project. Use the registration button after the payment function and private C2B credentials are ready.</div>
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">This is Nyilora's separate callback endpoint. The button registers it with Safaricom and adds a private verification token automatically.</div>
         </div>
         <button type="button" class="btn btn-outline btn-sm" onclick="registerNyiloraC2b()">Register saved Paybill callback</button>
         <div style="background:rgba(16,185,129,0.07);border:1px solid rgba(16,185,129,0.2);border-radius:8px;padding:10px;margin-bottom:12px;font-size:12px;line-height:1.7">
           <strong style="color:var(--accent-green)">How clients pay:</strong><br>
           1. Open M-Pesa → Lipa na M-Pesa → Pay Bill<br>
           2. Business no: <strong>${settings.mpesa_shortcode||'&lt;your shortcode&gt;'}</strong><br>
-          3. Account no: <strong>Nyilora's approved client reference</strong><br>
-          4. Enter amount and PIN. Matching rules will be confirmed before live use.
+          3. Account no: <strong>Client's registered national ID number</strong><br>
+          4. Enter amount and PIN. Unknown or ambiguous ID numbers go to Suspense for review.
         </div>
         <div class="form-group" style="display:flex;align-items:center;gap:8px">
           <label class="toggle"><input type="checkbox" id="setAutoConfirm" ${settings.mpesa_auto_confirm?'checked':''}><span class="toggle-slider"></span></label>
@@ -7725,7 +7730,18 @@ async function renderSettings(){
       
       <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
     `;
+    loadC2bCredentialStatus();
   }catch(e){toast(e.message,'error')}
+}
+
+async function loadC2bCredentialStatus(){
+  const status=$('#setC2bCredentialStatus');
+  if(!status)return;
+  try{
+    const{data,error}=await supabaseClient.functions.invoke('nyilora-c2b-settings',{body:{action:'status'}});
+    if(error||!data?.ok)throw new Error(data?.message||'Credential status unavailable');
+    status.textContent=data.credentials_saved?'Daraja C2B key and secret are saved. Leave both fields blank to keep them, or enter both to replace them.':'No Daraja C2B key and secret saved yet.';
+  }catch(e){status.textContent='Could not check saved credentials. Deploy the Nyilora C2B settings function.';}
 }
 
 async function saveSettings(){
@@ -7733,8 +7749,9 @@ async function saveSettings(){
     const shortcode = $('#setShortcode').value.trim();
     const darajaEnv = $('#setDarajaEnv').value;
     if(shortcode && !/^\d{5,10}$/.test(shortcode)) throw new Error('Enter a valid Paybill number using digits only.');
-
-    // Private Daraja credentials are configured as Edge Function secrets.
+    const consumerKey=$('#setC2bConsumerKey').value.trim();
+    const consumerSecret=$('#setC2bConsumerSecret').value.trim();
+    if((consumerKey&&!consumerSecret)||(!consumerKey&&consumerSecret))throw new Error('Enter both Daraja consumer key and secret, or leave both blank.');
     const rec={
       company_name:$('#setName').value,company_phone:$('#setPhone').value,company_email:$('#setEmail').value,
       company_address:$('#setAddr').value,currency:$('#setCurrency').value,
@@ -7755,6 +7772,13 @@ async function saveSettings(){
     if(saveError)throw saveError;
     appSettings={...appSettings,...rec};
     await audit('settings_changed','loan_settings',null,null,rec);
+    if(consumerKey&&consumerSecret){
+      const{data,error}=await supabaseClient.functions.invoke('nyilora-c2b-settings',{body:{action:'save',consumer_key:consumerKey,consumer_secret:consumerSecret}});
+      if(error||!data?.ok)throw new Error(data?.message||'Company settings saved, but Daraja credentials could not be saved. Please try again.');
+      $('#setC2bConsumerKey').value='';
+      $('#setC2bConsumerSecret').value='';
+      loadC2bCredentialStatus();
+    }
     toast('Settings saved','success');
     const saveBtn2 = document.querySelector('[onclick="saveSettings()"]');
     if(saveBtn2){ saveBtn2.disabled=false; saveBtn2.textContent='Save Settings'; }

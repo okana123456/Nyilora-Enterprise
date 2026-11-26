@@ -1,5 +1,5 @@
 -- Read-only. Run in Nyilora's Supabase project sedzaagjqfsoxglcwyed.
--- Identify the actual company account before adding a Paybill or C2B secrets.
+-- Identify the actual company account before saving its Paybill and C2B key pair in Settings.
 select s.business_id, s.company_name,
        s.mpesa_shortcode as saved_paybill,
        s.daraja_environment,
