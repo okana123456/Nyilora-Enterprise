@@ -43,6 +43,13 @@ function compactAccount(value: unknown) {
   return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
 }
 
+function sameToken(a: string, b: string) {
+  if (!a || a.length !== b.length) return false;
+  let difference = 0;
+  for (let i = 0; i < a.length; i++) difference |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return difference === 0;
+}
+
 async function sendRepaymentSms(supabaseUrl: string, serviceKey: string, repaymentId: string | null | undefined) {
   if (!repaymentId) return;
   try {
@@ -68,6 +75,26 @@ serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
+
+  const projectUrl = Deno.env.get("SUPABASE_URL") || "";
+  if (!projectUrl || new URL(projectUrl).host !== "sedzaagjqfsoxglcwyed.supabase.co") {
+    return new Response("Wrong Supabase project", { status: 503 });
+  }
+  const callbackToken = (Deno.env.get("NYILORA_C2B_CALLBACK_TOKEN") || "").trim();
+  if (callbackToken.length < 32) return new Response("Callback not configured", { status: 503 });
+  const requestUrl = new URL(req.url);
+  if (!sameToken(requestUrl.searchParams.get("token") || "", callbackToken)) {
+    return new Response("Forbidden", { status: 403 });
+  }
+
+  // A validation call acknowledges the Paybill and never records a payment.
+  if (requestUrl.searchParams.get("validation") === "1") {
+    return new Response(JSON.stringify({ ResultCode: 0, ResultDesc: "Accepted" }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const accepted = new Response(JSON.stringify({ ResultCode: 0, ResultDesc: "Accepted" }), {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
     status: 200,
@@ -91,9 +118,10 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    const { data: allSettingsRows } = await supabase
+    const { data: allSettingsRows, error: settingsError } = await supabase
       .from("loan_settings")
       .select("business_id, mpesa_auto_confirm, mpesa_shortcode");
+    if (settingsError) throw settingsError;
 
     const shortcodeDigits = digitsOnly(shortcode);
     const settingsRows = (allSettingsRows || []).filter((row) =>
@@ -119,12 +147,13 @@ serve(async (req) => {
         : new Date().toISOString();
     }
 
-    const { data: existingRepayment } = await supabase
+    const { data: existingRepayment, error: repaymentLookupError } = await supabase
       .from("loan_repayments")
       .select("id, loan_id, business_id")
       .or(`payment_reference.eq.${transId},receipt_no.eq.${transId}`)
       .limit(1)
       .maybeSingle();
+    if (repaymentLookupError) throw repaymentLookupError;
 
     if (existingRepayment) {
       return accepted;
@@ -240,6 +269,7 @@ serve(async (req) => {
       if (queueLookupError) console.error("Could not look up M-Pesa callback", transId, queueLookupError);
       queueId = existingQueue?.id;
     }
+    if (!queueId) throw new Error("Could not persist the M-Pesa callback before allocation");
     if (clientLookupError) {
       // Persist the callback first so a temporary lookup/deployment failure
       // cannot discard a received payment.
@@ -476,6 +506,8 @@ serve(async (req) => {
     return accepted;
   } catch (error) {
     console.error("Webhook System Error:", error);
-    return accepted;
+    return new Response(JSON.stringify({ ResultCode: 1, ResultDesc: "Processing unavailable" }), {
+      status: 500, headers: { "Content-Type": "application/json" },
+    });
   }
 });

@@ -4148,7 +4148,7 @@ async function renderRepayments(page=1){
     let myQueue = [];
     if(canPay){
       const{data:mpesaQueue}=await sb('mpesa_callback_queue').select('*').eq('confirmed',false).order('created_at',{ascending:false});
-      myQueue = (mpesaQueue||[]).filter(q => q.business_short_code === currentUser.business_id || !q.business_short_code);
+      myQueue = (mpesaQueue||[]).filter(q => q.business_id === currentUser.business_id && !q.dismissed);
     }
     main.innerHTML=`
       <div class="page-header" style="align-items:flex-start; flex-direction:column; margin-bottom:12px">
@@ -6725,17 +6725,6 @@ async function renderOfficerPerformance(){
   }catch(e){main.innerHTML=`<div class="empty-state"><p>Error: ${e.message}</p></div>`;toast(e.message,'error')}
 }
 
-// ═══ DARAJA HELPERS ═══
-function copyCallbackUrl(){
-  const inp=document.getElementById('setCallbackUrl');
-  if(!inp) return;
-  inp.select(); inp.setSelectionRange(0, 99999);
-  try { navigator.clipboard.writeText(inp.value); toast('Callback URL copied','success'); }
-  catch(e){ document.execCommand('copy'); toast('Callback URL copied','success'); }
-}
-
-
-
 // ═══ ACCOUNTING ═══
 async function triggerRepaymentSms(repaymentId){
   if(!repaymentId)return;
@@ -7688,20 +7677,21 @@ async function renderSettings(){
       </div>
       <div class="card" style="max-width:700px;margin-bottom:16px;border-color:var(--accent-green)">
         <h3 style="font-size:16px;margin-bottom:4px;color:var(--accent-green)">📶 M-Pesa Daraja C2B Settings</h3>
-        <p style="font-size:12px;color:var(--text-secondary);margin-bottom:14px">Enter Nyilora's Paybill when issued. Payment account matching will be configured and tested with Nyilora before live use.</p>
+        <p style="font-size:12px;color:var(--text-secondary);margin-bottom:14px">Save this company's Paybill, then register its callback with Safaricom. Keep automatic allocation off until a small payment reaches Suspense correctly.</p>
+        <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">Business ID for this setup: <strong>${escapeHtml(currentUser.business_id)}</strong></p>
         <div class="form-row">
           <div class="form-group"><label>Shortcode (Paybill)</label><input class="input" id="setShortcode" value="${settings.mpesa_shortcode||''}" placeholder="e.g. 174379"></div>
           <div class="form-group"><label>Environment</label><select class="select" id="setDarajaEnv"><option value="sandbox" ${(settings.daraja_environment||'sandbox')==='sandbox'?'selected':''}>Sandbox (Testing)</option><option value="production" ${settings.daraja_environment==='production'?'selected':''}>Production (Live)</option></select></div>
         </div>
         <p style="font-size:12px;color:var(--text-secondary);margin-bottom:14px">Daraja credentials and the STK passkey belong in Nyilora's private Supabase Edge Function secrets. They are never entered or displayed in this browser.</p>
         <div class="form-group">
-          <label>C2B Confirmation URL (auto-registered with Safaricom on Save)</label>
+          <label>Nyilora C2B receiver (registration adds a private token)</label>
           <div style="display:flex;gap:6px">
             <input class="input" id="setCallbackUrl" value="${callbackUrl}" readonly style="opacity:0.7">
-            <button type="button" class="btn btn-outline btn-sm" onclick="copyCallbackUrl()">Copy</button>
           </div>
-          <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">Register this URL with Safaricom only after Nyilora's payment function has been deployed and tested.</div>
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">This endpoint belongs to Nyilora's Supabase project. Use the registration button after the payment function and private C2B credentials are ready.</div>
         </div>
+        <button type="button" class="btn btn-outline btn-sm" onclick="registerNyiloraC2b()">Register saved Paybill callback</button>
         <div style="background:rgba(16,185,129,0.07);border:1px solid rgba(16,185,129,0.2);border-radius:8px;padding:10px;margin-bottom:12px;font-size:12px;line-height:1.7">
           <strong style="color:var(--accent-green)">How clients pay:</strong><br>
           1. Open M-Pesa → Lipa na M-Pesa → Pay Bill<br>
@@ -7742,6 +7732,7 @@ async function saveSettings(){
   try{
     const shortcode = $('#setShortcode').value.trim();
     const darajaEnv = $('#setDarajaEnv').value;
+    if(shortcode && !/^\d{5,10}$/.test(shortcode)) throw new Error('Enter a valid Paybill number using digits only.');
 
     // Private Daraja credentials are configured as Edge Function secrets.
     const rec={
@@ -7756,8 +7747,12 @@ async function saveSettings(){
       daraja_environment:darajaEnv,mpesa_auto_confirm:$('#setAutoConfirm').checked,
       business_id:currentUser?.business_id||'nyilora'
     };
-    const{data:existing}=await sb('loan_settings').select('id').eq('business_id',rec.business_id).single();
-    if(existing){await sb('loan_settings').update(rec).eq('id',existing.id)}else{await sb('loan_settings').insert(rec)}
+    const{data:existing,error:lookupError}=await sb('loan_settings').select('id').eq('business_id',rec.business_id).maybeSingle();
+    if(lookupError)throw lookupError;
+    const{error:saveError}=existing
+      ?await sb('loan_settings').update(rec).eq('id',existing.id)
+      :await sb('loan_settings').insert(rec);
+    if(saveError)throw saveError;
     appSettings={...appSettings,...rec};
     await audit('settings_changed','loan_settings',null,null,rec);
     toast('Settings saved','success');
@@ -7768,6 +7763,17 @@ async function saveSettings(){
     const saveBtn = document.querySelector('[onclick="saveSettings()"]');
     if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='Save Settings'; }
   }
+}
+
+async function registerNyiloraC2b(){
+  if(!hasRole('admin'))return toast('Admin access required','warning');
+  if(!await confirm_('Register the saved Paybill callback with Safaricom? This replaces any callback URLs currently registered for this Paybill.'))return;
+  try{
+    const{data,error}=await supabaseClient.functions.invoke('nyilora-register-c2b',{body:{}});
+    if(error)throw error;
+    if(!data?.ok)throw new Error(data?.message||'Safaricom did not confirm registration.');
+    toast(data.message,'success');
+  }catch(e){toast(e.message||String(e),'error')}
 }
 
 async function undoLastImport() {

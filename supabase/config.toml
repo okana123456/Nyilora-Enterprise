@@ -1,0 +1,11 @@
+[functions.nyilora-register-c2b]
+verify_jwt = true
+
+[functions.payment-callback]
+verify_jwt = false
+
+[functions.service-payment-callback]
+verify_jwt = false
+
+[functions.sms-bundle-payment-callback]
+verify_jwt = false

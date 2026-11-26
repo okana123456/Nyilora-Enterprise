@@ -14,6 +14,8 @@ Nyilora is a green lending system with the same functional areas as Bripta. This
 
 Each business enters its own unique M-Pesa Paybill in Settings. The callback uses that Paybill to identify the business; payments with unknown or ambiguous Paybills go into the service-only `nyilora_unrouted_callbacks` table for review. Do not enable a business's live callback until its Paybill and loan repayment test have been verified. The callback URL belongs to this Nyilora Supabase project only.
 
+For a production Paybill, follow [NYILORA-DARAJA-GO-LIVE.md](NYILORA-DARAJA-GO-LIVE.md). It covers the separate Nyilora callback, private C2B credentials, registration and the first payment checks. Use [NYILORA-DARAJA-READINESS.sql](NYILORA-DARAJA-READINESS.sql) to identify which company account holds the live loans before configuring its Paybill.
+
 Each business needs its own approved sender ID and SMS provider configuration. The original `BIZ-NYILORA` uses `NYILORA_SMS_API_TOKEN`, `NYILORA_SMS_SEND_URL`, and `NYILORA_SMS_SENDER_ID`. For a new ID such as `BIZ-ABC123`, use `NYILORA_SMS_API_TOKEN__ABC123`, `NYILORA_SMS_SEND_URL__ABC123`, and `NYILORA_SMS_SENDER_ID__ABC123` as secrets in the **Nyilora** Supabase project. Other existing payment provider secrets remain private in the same project. SMS credits cost KES 0.55 each. Subscription billing starts in December 2026 at KES 3,000 per business each month.
 
 ## Local checks
