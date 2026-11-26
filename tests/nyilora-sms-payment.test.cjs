@@ -88,6 +88,7 @@ async function main() {
   assert.equal(paid.result.status, 200);
   assert.equal(paid.calls.topups.length, 1);
   assert.equal(paid.calls.topups[0].args.p_business_id, 'BIZ-A1C8E7FBD382');
+  assert.equal(paid.calls.topups[0].args.p_customer_reference, checkoutId);
   assert.equal(paid.calls.updates.at(-1).value.status, 'credited');
 
   let stkPayload;

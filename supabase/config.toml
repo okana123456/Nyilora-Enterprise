@@ -12,3 +12,6 @@ verify_jwt = false
 
 [functions.sms-bundle-payment-callback]
 verify_jwt = false
+
+[functions.reconcile-sms-bundle-payment]
+verify_jwt = true

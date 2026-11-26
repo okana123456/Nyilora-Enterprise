@@ -118,7 +118,9 @@ Deno.serve(async (req) => {
         p_business_id: requestRow.business_id,
         p_credits: requestRow.credits,
         p_customer_amount_paid: paidAmount || requestRow.amount,
-        p_customer_reference: receipt ? String(receipt) : checkoutRequestId,
+        // The checkout ID identifies this purchase across callback and manual
+        // status checks, so concurrent retries cannot issue a second top-up.
+        p_customer_reference: checkoutRequestId,
         p_note: `Auto-credited from SMS bundle request ${requestRow.id}`,
       });
       if (topupError) throw topupError;

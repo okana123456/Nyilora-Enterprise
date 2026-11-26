@@ -6914,11 +6914,11 @@ async function renderSmsCenter(page=1){
         ${rows.length?rows.map(r=>`<tr><td>${fmtDateTime(r.queued_at)}</td><td>${smsKindLabel(r)}</td><td><strong>${escapeHtml(r.client_name||'-')}</strong></td><td>${escapeHtml(r.recipient||'-')}</td><td style="min-width:260px;white-space:normal">${escapeHtml(r.message||'Waiting for final message')}</td><td>${Number(r.segments||0)||'-'}</td><td>${smsStatusBadge(r.status)}</td><td style="font-size:11px;color:var(--text-secondary);white-space:normal">${escapeHtml(r.last_error||r.provider_uid||'-')}</td></tr>`).join(''):'<tr><td colspan="8" style="text-align:center;color:var(--text-secondary);padding:18px">No SMS records in this period</td></tr>'}
       </tbody></table></div></div>
       ${smsPageHtml(safePage,totalPages,totalMessages,pageSize)}
-      <div class="card"><h3 style="font-size:14px;margin-bottom:10px">Bundle history</h3><div class="table-wrap"><table><thead><tr><th>Date</th><th>Credits</th><th>Amount Paid</th><th>Payment Reference</th><th>Note</th></tr></thead><tbody>
-        ${(topups||[]).length?(topups||[]).map(t=>`<tr><td>${fmtDateTime(t.created_at)}</td><td><strong>${Number(t.credits||0).toLocaleString()}</strong></td><td>${t.customer_amount_paid==null?'-':`KES ${Number(t.customer_amount_paid).toLocaleString('en-KE',{minimumFractionDigits:2,maximumFractionDigits:2})}`}</td><td>${escapeHtml(t.customer_reference||'-')}</td><td>${escapeHtml(t.note||'-')}</td></tr>`).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--text-secondary)">No SMS bundles purchased yet</td></tr>'}
+      <div class="card"><h3 style="font-size:14px;margin-bottom:10px">Bundle history</h3><div class="table-wrap"><table><thead><tr><th>Date</th><th>Credits</th><th>Amount Paid</th><th>Purchase Reference</th></tr></thead><tbody>
+        ${(topups||[]).length?(topups||[]).map(t=>`<tr><td>${fmtDateTime(t.created_at)}</td><td><strong>${Number(t.credits||0).toLocaleString()}</strong></td><td>${t.amount==null?'-':`KES ${Number(t.amount).toLocaleString('en-KE',{minimumFractionDigits:2,maximumFractionDigits:2})}`}</td><td>${escapeHtml(t.reference||'-')}</td></tr>`).join(''):'<tr><td colspan="4" style="text-align:center;color:var(--text-secondary)">No SMS bundles purchased yet</td></tr>'}
       </tbody></table></div></div>
-      <div class="card" style="margin-top:18px"><h3 style="font-size:14px;margin-bottom:10px">Bundle requests</h3><div class="table-wrap"><table><thead><tr><th>Date</th><th>Credits</th><th>Amount Requested</th><th>Phone</th><th>Status</th></tr></thead><tbody>
-        ${(requests||[]).length?(requests||[]).map(r=>`<tr><td>${fmtDateTime(r.created_at)}</td><td><strong>${Number(r.credits||0).toLocaleString()}</strong></td><td>${r.amount==null?'-':`KES ${Number(r.amount).toLocaleString('en-KE',{minimumFractionDigits:2,maximumFractionDigits:2})}`}</td><td>${escapeHtml(r.phone||'-')}</td><td>${smsStatusBadge(r.status||'pending')}</td></tr>`).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--text-secondary)">No bundle requests yet</td></tr>'}
+      <div class="card" style="margin-top:18px"><h3 style="font-size:14px;margin-bottom:10px">Bundle requests</h3><div class="table-wrap"><table><thead><tr><th>Date</th><th>Credits</th><th>Amount Requested</th><th>Phone</th><th>Status</th><th>Action</th></tr></thead><tbody>
+        ${(requests||[]).length?(requests||[]).map(r=>`<tr><td>${fmtDateTime(r.created_at)}</td><td><strong>${Number(r.credits||0).toLocaleString()}</strong></td><td>${r.amount==null?'-':`KES ${Number(r.amount).toLocaleString('en-KE',{minimumFractionDigits:2,maximumFractionDigits:2})}`}</td><td>${escapeHtml(r.phone||'-')}</td><td>${smsStatusBadge(r.status||'pending')}</td><td>${r.checkout_request_id&&r.status!=='credited'?`<button class="btn btn-outline btn-sm" data-request-id="${escapeHtml(r.id)}" onclick="reconcileSmsBundlePayment(this.dataset.requestId,this)">Check payment</button>`:'-'}</td></tr>`).join(''):'<tr><td colspan="6" style="text-align:center;color:var(--text-secondary)">No bundle requests yet</td></tr>'}
       </tbody></table></div></div>`;
   }catch(error){
     main.innerHTML=`<div class="empty-state"><h3>SMS Centre is not ready</h3><p>${escapeHtml(error.message||'Run the Nyilora SMS provider SMS wallet SQL setup.')}</p></div>`;
@@ -7033,6 +7033,23 @@ async function startSmsBundlePayment(btn){
   }catch(error){
     toast(error.message||'Could not start SMS payment','error');
     if(btn){btn.disabled=false;btn.textContent='Send M-Pesa Prompt';}
+  }
+}
+
+async function reconcileSmsBundlePayment(requestId,btn){
+  if(!requestId)return;
+  if(btn){btn.disabled=true;btn.textContent='Checking...';}
+  try{
+    const{data,error}=await supabaseClient.functions.invoke('reconcile-sms-bundle-payment',{
+      body:{request_id:requestId}
+    });
+    if(error)throw await nyiloraFunctionError(error,'Could not check SMS payment');
+    if(!data?.ok)throw new Error(data?.message||'Could not check SMS payment');
+    toast(data.message||'Payment check complete',data.credited?'success':'warning');
+    renderSmsCenter();
+  }catch(error){
+    toast(error.message||'Could not check SMS payment','error');
+    if(btn){btn.disabled=false;btn.textContent='Check payment';}
   }
 }
 

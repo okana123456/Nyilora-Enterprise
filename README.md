@@ -22,6 +22,8 @@ For the active Nyilora Enterprise company `BIZ-A1C8E7FBD382`, add `NYILORA_SMS_A
 
 SMS bundles are paid to the **system owner's Paybill**, not a tenant's loan Paybill. Set `SERVICE_SHORTCODE`, `SERVICE_CONSUMER_KEY`, `SERVICE_CONSUMER_SECRET`, `SERVICE_PASSKEY`, and `SERVICE_DARAJA_ENVIRONMENT=production` privately in the Nyilora project's Edge Function secrets. The SMS purchase function no longer falls back to a tenant's `DARAJA_*` credentials. Deploy `sms-bundle-payment-callback` and `start-sms-bundle-payment` together; the purchase function signs each callback URL and the callback verifies it before issuing credits. Existing in-flight SMS purchase requests created before this deployment require manual review, because their old callback URLs have no signature. Keep JWT verification off for `sms-bundle-payment-callback` so Safaricom can reach it.
 
+If an STK payment succeeds while the SMS callback is unavailable, deploy `reconcile-sms-bundle-payment` and use **SMS Centre → Bundle requests → Check payment**. It checks the saved checkout request with Safaricom and only credits a confirmed successful payment. It does not initiate a second charge. Keep JWT verification on for this administrator-only function. The callback and status check use the same checkout reference for idempotent crediting.
+
 ## Local checks
 
 The new database test loads the foundation and migrations into an isolated PostgreSQL runtime, reruns the update, creates two companies, and checks RLS, lending, expenses, accounting, callback suspense, SMS and billing isolation. The frontend and Edge Function files have also been syntax checked. These local tests do not replace a live payment callback, SMS provider, email invitation and role test in the Nyilora project.
