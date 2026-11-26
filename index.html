@@ -7694,9 +7694,10 @@ async function renderSettings(){
           <div style="display:flex;gap:6px">
             <input class="input" id="setCallbackUrl" value="${callbackUrl}" readonly style="opacity:0.7">
           </div>
-          <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">This is Nyilora's separate callback endpoint. The button registers it with Safaricom and adds a private verification token automatically.</div>
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">Saving Settings registers this endpoint with Safaricom and adds a private verification token automatically.</div>
         </div>
-        <button type="button" class="btn btn-outline btn-sm" onclick="registerNyiloraC2b()">Register saved Paybill callback</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="registerNyiloraC2b()">Register saved Paybill callback again</button>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">Saving Settings also registers this Paybill callback with Safaricom. Use this button to retry registration without changing Settings.</div>
         <div style="background:rgba(16,185,129,0.07);border:1px solid rgba(16,185,129,0.2);border-radius:8px;padding:10px;margin-bottom:12px;font-size:12px;line-height:1.7">
           <strong style="color:var(--accent-green)">How clients pay:</strong><br>
           1. Open M-Pesa → Lipa na M-Pesa → Pay Bill<br>
@@ -7755,6 +7756,8 @@ async function nyiloraFunctionError(error,fallback){
 }
 
 async function saveSettings(){
+  const saveBtn=document.querySelector('[onclick="saveSettings()"]');
+  if(saveBtn){saveBtn.disabled=true;saveBtn.textContent='Saving settings...';}
   try{
     const shortcode = $('#setShortcode').value.trim();
     const darajaEnv = $('#setDarajaEnv').value;
@@ -7790,13 +7793,22 @@ async function saveSettings(){
       $('#setC2bConsumerSecret').value='';
       loadC2bCredentialStatus();
     }
-    toast('Settings saved','success');
-    const saveBtn2 = document.querySelector('[onclick="saveSettings()"]');
-    if(saveBtn2){ saveBtn2.disabled=false; saveBtn2.textContent='Save Settings'; }
+    if(shortcode){
+      if(saveBtn)saveBtn.textContent='Registering Paybill callback...';
+      const{data,error}=await supabaseClient.functions.invoke('nyilora-register-c2b',{body:{}});
+      if(error){
+        const detail=await nyiloraFunctionError(error,'Paybill callback registration failed');
+        throw new Error(`Settings saved, but Paybill callback registration failed: ${detail.message}`);
+      }
+      if(!data?.ok)throw new Error(`Settings saved, but Paybill callback registration failed: ${data?.message||'Safaricom did not confirm registration.'}`);
+      toast('Settings saved and Paybill callback registration accepted by Safaricom','success');
+    }else{
+      toast('Settings saved. Add a Paybill and Daraja credentials to register payment callbacks.','success');
+    }
   }catch(e){
     toast(e.message,'error');
-    const saveBtn = document.querySelector('[onclick="saveSettings()"]');
-    if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='Save Settings'; }
+  }finally{
+    if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='Save Settings';}
   }
 }
 
@@ -7805,7 +7817,7 @@ async function registerNyiloraC2b(){
   if(!await confirm_('Register the saved Paybill callback with Safaricom? This replaces any callback URLs currently registered for this Paybill.'))return;
   try{
     const{data,error}=await supabaseClient.functions.invoke('nyilora-register-c2b',{body:{}});
-    if(error)throw error;
+    if(error)throw await nyiloraFunctionError(error,'Paybill callback registration failed');
     if(!data?.ok)throw new Error(data?.message||'Safaricom did not confirm registration.');
     toast(data.message,'success');
   }catch(e){toast(e.message||String(e),'error')}
