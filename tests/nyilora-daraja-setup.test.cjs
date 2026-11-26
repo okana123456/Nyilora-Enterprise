@@ -92,32 +92,13 @@ async function main() {
   assert.equal(result.status, 200);
   assert.equal((await result.json()).ok, true);
   assert.equal(requests.length, 2);
+  assert.match(requests[1].url, /\/mpesa\/c2b\/v2\/registerurl$/);
   const payload = JSON.parse(requests[1].options.body);
   assert.equal(payload.ShortCode, '654321');
   assert.equal(new URL(payload.ConfirmationURL).host, 'sedzaagjqfsoxglcwyed.supabase.co');
   assert.equal(new URL(payload.ConfirmationURL).searchParams.get('token'), callbackToken);
   assert.equal(new URL(payload.ValidationURL).searchParams.get('validation'), '1');
   assert.ok(!JSON.stringify(payload).includes('test-secret'));
-
-  const retryRequests = [];
-  const retryRegister = loadFunction('supabase/functions/nyilora-register-c2b/index.ts',
-    environment, createClient, async (url, options) => {
-      retryRequests.push({ url, options });
-      return new Response(JSON.stringify(retryRequests.length === 1
-        ? { access_token: 'temporary-test-token' }
-        : retryRequests.length === 2
-          ? { errorMessage: 'Error Occurred - Invalid Access Token -' }
-          : { ConversationID: 'test-v2-conversation' }),
-      { status: retryRequests.length === 2 ? 401 : 200 });
-    });
-  const retryResult = await retryRegister(new Request(`${projectUrl}/functions/v1/nyilora-register-c2b`, {
-    method: 'POST', headers: { authorization: 'Bearer test-user-token' },
-  }));
-  assert.equal((await retryResult.json()).ok, true);
-  assert.equal(retryRequests.length, 3);
-  assert.match(retryRequests[1].url, /\/mpesa\/c2b\/v1\/registerurl$/);
-  assert.match(retryRequests[2].url, /\/mpesa\/c2b\/v2\/registerurl$/);
-  assert.equal(retryRequests[1].options.body, retryRequests[2].options.body);
 
   const callback = loadFunction('supabase/functions/payment-callback/index.ts',
     environment, createClient, () => { throw new Error('No outbound call expected'); });

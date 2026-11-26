@@ -80,36 +80,21 @@ serve(async (req) => {
     callback.searchParams.set("token", callbackToken);
     const validation = new URL(callback);
     validation.searchParams.set("validation", "1");
-    const path = (Deno.env.get("NYILORA_C2B_REGISTER_PATH") || "/mpesa/c2b/v1/registerurl").trim();
-    if (!["/mpesa/c2b/v1/registerurl", "/mpesa/c2b/v2/registerurl"].includes(path)) {
-      return json({ ok: false, message: "Invalid C2B registration path configuration." }, 503);
-    }
-
-    const payload = JSON.stringify({
-      ShortCode: shortcode,
-      ResponseType: "Completed",
-      ConfirmationURL: callback.toString(),
-      ValidationURL: validation.toString(),
+    const registrationResponse = await fetch(`${baseUrl}/mpesa/c2b/v2/registerurl`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${oauth.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ShortCode: shortcode,
+        ResponseType: "Completed",
+        ConfirmationURL: callback.toString(),
+        ValidationURL: validation.toString(),
+      }),
+      signal: AbortSignal.timeout(20000),
     });
-    const registerAt = async (endpoint: string) => {
-      const response = await fetch(`${baseUrl}${endpoint}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${oauth.access_token}`,
-          "Content-Type": "application/json",
-        },
-        body: payload,
-        signal: AbortSignal.timeout(20000),
-      });
-      const result = await response.json().catch(() => ({}));
-      return { response, result };
-    };
-    let { response: registrationResponse, result: registration } = await registerAt(path);
-    const firstError = String(registration.errorMessage || registration.ResponseDescription || "");
-    if (/invalid access token/i.test(firstError) &&
-        path === "/mpesa/c2b/v1/registerurl" && !Deno.env.get("NYILORA_C2B_REGISTER_PATH")) {
-      ({ response: registrationResponse, result: registration } = await registerAt("/mpesa/c2b/v2/registerurl"));
-    }
+    const registration = await registrationResponse.json().catch(() => ({}));
     const accepted = registrationResponse.ok && !registration.errorCode &&
       (registration.ConversationID || registration.OriginatorConversationID ||
         String(registration.ResponseCode || "") === "0");
