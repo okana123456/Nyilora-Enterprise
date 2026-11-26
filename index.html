@@ -4298,6 +4298,7 @@ async function confirmMpesaPayment(queueId){
     await sb('loans').update({
       total_paid: mpNewPaid,
       outstanding_balance: mpNewBalance,
+      updated_at: new Date().toISOString(),
       status: mpNewBalance <= 0 ? 'completed' : mpLoanRef.status
     }).eq('id', loan.id);
     await sb('mpesa_callback_queue').update({confirmed:true,loan_id:loan.id,repayment_id:repayment?.id||null}).eq('id',queueId);
@@ -4499,6 +4500,7 @@ async function enforceMinimumWeekInterest(loan, paymentAmount){
   const correctedBalance = Number((Math.max(0, Number(loan.outstanding_balance) - paymentAmount) + shortfall).toFixed(2));
   const{error:minimumLoanError}=await sb('loans').update({
     outstanding_balance: correctedBalance,
+    updated_at: new Date().toISOString(),
     total_interest: Number((Number(loan.total_interest||0) + shortfall).toFixed(2)),
     total_payable:  Number((Number(loan.total_payable||0)  + shortfall).toFixed(2))
   }).eq('id', loan.id);
@@ -4657,6 +4659,7 @@ async function savePayment(){
     const{data:updatedLoan,error:loanUpdateError}=await sb('loans').update({
       total_paid:newPaid,
       outstanding_balance:newBalance,
+      updated_at:new Date().toISOString(),
       status:newBalance<=0?'completed':loanRef.status,
       overdue_days:newBalance<=0?0:newOverdueDays,
       arrears_amount:newBalance<=0?0:Number(Math.min(newBalance,Math.max(0,newArrears)).toFixed(2))
@@ -6484,6 +6487,7 @@ async function confirmSuspenseMatch(entryId, entryType, amount, ref){
     await sb('loans').update({
       total_paid:newPaid,
       outstanding_balance:newBal,
+      updated_at:new Date().toISOString(),
       status:newBal<=0?'completed':loanRef.status,
       overdue_days:newBal<=0?0:newOverdueDays,
       arrears_amount:newBal<=0?0:Number(Math.min(newBal,Math.max(0,newArrears)).toFixed(2))

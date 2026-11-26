@@ -492,6 +492,7 @@ serve(async (req) => {
       .update({
         total_paid: newTotalPaid,
         outstanding_balance: newBalance,
+        updated_at: new Date().toISOString(),
         status: newBalance <= 0 ? "completed" : loan.status,
         arrears_amount: newBalance <= 0 ? 0 : Number(Math.min(newBalance, arrears).toFixed(2)),
         overdue_days: newBalance <= 0 ? 0 : overdueDays,
