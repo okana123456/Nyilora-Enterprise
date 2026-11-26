@@ -1,13 +1,29 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 const ORIGINAL_BUSINESS_ID = "BIZ-NYILORA";
+const TALKSASA_SEND_URL = "https://bulksms.talksasa.com/api/v3/sms/send";
+
+function smsSendUrl(configured: string) {
+  const value = configured.trim();
+  if (!value) return TALKSASA_SEND_URL;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return "";
+    if (/\/api\/v3\/?$/.test(url.pathname)) {
+      url.pathname = `${url.pathname.replace(/\/$/, "")}/sms/send`;
+    }
+    return url.toString();
+  } catch (_) {
+    return "";
+  }
+}
 
 function smsConfig(businessId: string) {
   const suffix = businessId.replace(/^BIZ-/i, "").replace(/[^A-Z0-9]/gi, "_").toUpperCase();
   const original = businessId === ORIGINAL_BUSINESS_ID;
   return {
     token: Deno.env.get(original ? "NYILORA_SMS_API_TOKEN" : `NYILORA_SMS_API_TOKEN__${suffix}`)?.trim() || "",
-    url: Deno.env.get(original ? "NYILORA_SMS_SEND_URL" : `NYILORA_SMS_SEND_URL__${suffix}`)?.trim() || "",
+    url: smsSendUrl(Deno.env.get(original ? "NYILORA_SMS_SEND_URL" : `NYILORA_SMS_SEND_URL__${suffix}`) || ""),
     sender: Deno.env.get(original ? "NYILORA_SMS_SENDER_ID" : `NYILORA_SMS_SENDER_ID__${suffix}`)?.trim() || "",
   };
 }
@@ -132,7 +148,7 @@ async function deliverClaim(
   claim: any,
 ) {
   const config = smsConfig(String(claim.business_id || ""));
-  const senderId = String(claim.sender_id || config.sender).trim();
+  const senderId = config.sender;
   if (!config.token || !config.url || !senderId) {
     await admin.rpc("nyilora_complete_repayment_sms", {
       p_outbox_id: claim.outbox_id,p_status: "failed",

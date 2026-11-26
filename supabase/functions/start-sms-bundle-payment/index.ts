@@ -22,13 +22,23 @@ function normalizePhone(phone: unknown) {
 }
 
 function timestamp() {
-  const d = new Date();
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Nairobi", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date());
+  const value = (type: string) => parts.find((part) => part.type === type)?.value || "";
+  return ["year", "month", "day", "hour", "minute", "second"].map(value).join("");
 }
 
 function env(name: string) {
-  return String(Deno.env.get(name) || Deno.env.get(name.replace("SERVICE_", "DARAJA_")) || "").trim();
+  return String(Deno.env.get(name) || "").trim();
+}
+
+async function callbackSignature(secret: string, requestId: string) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signed = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(requestId)));
+  return Array.from(signed, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 serve(async (req) => {
@@ -86,6 +96,16 @@ serve(async (req) => {
       }, 400);
     }
 
+    const { data: companySettings, error: settingsError } = await supabase
+      .from("loan_settings")
+      .select("mpesa_shortcode")
+      .eq("business_id", staff.business_id)
+      .maybeSingle();
+    if (settingsError) throw settingsError;
+    if (String(companySettings?.mpesa_shortcode || "").trim() === shortcode) {
+      return json({ ok: false, message: "SMS purchases must use the owner's Paybill, separate from this company's loan Paybill." }, 503);
+    }
+
     const baseUrl = mode === "sandbox" ? "https://sandbox.safaricom.co.ke" : "https://api.safaricom.co.ke";
     const oauthRes = await fetch(`${baseUrl}/oauth/v1/generate?grant_type=client_credentials`, {
       headers: { Authorization: `Basic ${btoa(`${consumerKey}:${consumerSecret}`)}` },
@@ -113,7 +133,10 @@ serve(async (req) => {
     if (requestError) return json({ ok: false, message: requestError.message }, 500);
 
     const ts = timestamp();
-    const callbackUrl = `${supabaseUrl}/functions/v1/sms-bundle-payment-callback`;
+    const callback = new URL(`${supabaseUrl}/functions/v1/sms-bundle-payment-callback`);
+    callback.searchParams.set("request", requestRow.id);
+    callback.searchParams.set("signature", await callbackSignature(serviceKey, requestRow.id));
+    const callbackUrl = callback.toString();
     const accountReference = `SMS${String(staff.business_id).replace(/[^a-z0-9]/gi, "").slice(-7).toUpperCase()}`.slice(0, 12);
     const payload = {
       BusinessShortCode: Number(shortcode),
