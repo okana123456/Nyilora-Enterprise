@@ -22,9 +22,12 @@ function normalizePhone(phone: string) {
 }
 
 function timestamp() {
-  const d = new Date();
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Nairobi", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date());
+  const value = (type: string) => parts.find((part) => part.type === type)?.value || "";
+  return ["year", "month", "day", "hour", "minute", "second"].map(value).join("");
 }
 
 function env(name: string) {

@@ -376,7 +376,7 @@ function serviceBillingAmount(month=serviceBillingMonth()){
   return Number(NYILORA_CONFIG.subscriptionAmountKes);
 }
 const SERVICE_BILLING_FIRST_REMINDER_DATE = NYILORA_CONFIG.billingStartDate || '2099-01-01';
-const SERVICE_BILLING_REMINDER_DAY = 2;
+const SERVICE_BILLING_REMINDER_DAY = 1;
 const SERVICE_BILLING_LOCK_DAY = 4;
 
 // Nyilora keeps operational audit identities separate from portfolio ownership.
@@ -1129,14 +1129,13 @@ function closeModal(){$('#modalOverlay').classList.remove('open')}
 
 // SERVICE SUBSCRIPTION BILLING
 function serviceBillingMonth(d=new Date()){
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`;
+  return `${kenyaDateISO(d).slice(0,7)}-01`;
 }
 function serviceBillingDueDate(){
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(SERVICE_BILLING_LOCK_DAY).padStart(2,'0')}`;
+  return `${serviceBillingMonth().slice(0,7)}-${String(SERVICE_BILLING_LOCK_DAY).padStart(2,'0')}`;
 }
 function isBeforeServiceBillingStart(){
-  return localISODate() < SERVICE_BILLING_FIRST_REMINDER_DATE;
+  return kenyaDateISO() < SERVICE_BILLING_FIRST_REMINDER_DATE;
 }
 function isServiceBillingUser(){
   return !!currentUser && hasRole('admin','branch_manager');
@@ -1160,7 +1159,7 @@ function loadCachedServiceBilling(){
 async function loadServiceBillingStatus({silent=false}={}){
   if(!currentUser?.business_id || !isServiceBillingUser()) return;
   const month = serviceBillingMonth();
-  const todayStr = localISODate();
+  const todayStr = kenyaDateISO();
   if(isBeforeServiceBillingStart()){
     setServiceBillingState({
       status:'paid',
@@ -1174,7 +1173,7 @@ async function loadServiceBillingStatus({silent=false}={}){
     renderServiceBillingOverlay();
     return;
   }
-  const day = new Date().getDate();
+  const day = Number(todayStr.slice(8,10));
   try{
     const { data:{ session } } = await supabaseClient.auth.getSession();
     if(!session?.access_token) throw new Error('Your secure session has expired. Please sign in again.');
@@ -1205,7 +1204,10 @@ async function loadServiceBillingStatus({silent=false}={}){
     }
   }catch(e){
     loadCachedServiceBilling();
-    const dayNow = new Date().getDate();
+    if(serviceBilling.cycleMonth!==month){
+      serviceBilling={status:'unknown',paid:false,locked:false,reminder:false,pending:false,cycleMonth:month,checkedAt:null};
+    }
+    const dayNow = Number(todayStr.slice(8,10));
     if(!serviceBilling.paid){
       serviceBilling.locked = dayNow >= SERVICE_BILLING_LOCK_DAY;
       serviceBilling.reminder = dayNow >= SERVICE_BILLING_REMINDER_DAY;
