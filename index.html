@@ -695,6 +695,7 @@ const $ = (sel) => document.querySelector(sel);
 let appFilters = {
     dashboard: { type: 'this_month', start: '', end: '' },
     accounting: { type: 'this_month', start: '', end: '' },
+    expenses: { type: 'this_month', start: '', end: '' },
     repayments: { type: 'this_month', start: '', end: '' },
     sms: { type: 'today', start: '', end: '' }
 };
@@ -727,19 +728,48 @@ function updateDateFilter(section, type) {
         if(section==='dashboard') renderDashboard();
         if(section==='accounting') renderAccountingLegacy();
         if(section==='repayments') renderRepayments(1);
+        if(section==='expenses') renderExpenses(1);
         if(section==='sms') renderSmsCenter(1);
     } else {
+        if(section==='expenses') {
+            const todayISO=kenyaDateISO(new Date());
+            if(!appFilters.expenses.start) appFilters.expenses.start=`${todayISO.slice(0,7)}-01`;
+            if(!appFilters.expenses.end) appFilters.expenses.end=todayISO;
+            renderExpenses(1);
+            return;
+        }
         document.getElementById(section+'CustomDates').style.display = 'flex';
     }
 }
 
 function applyCustomDate(section) {
-    appFilters[section].start = document.getElementById(section+'Start').value;
-    appFilters[section].end = document.getElementById(section+'End').value;
+    const start=document.getElementById(section+'Start').value;
+    const end=document.getElementById(section+'End').value;
+    if(section==='expenses' && (!start || !end || start>end)) return toast('Choose a valid expense date range','warning');
+    appFilters[section].start = start;
+    appFilters[section].end = end;
     if(section==='dashboard') renderDashboard();
     if(section==='accounting') renderAccountingLegacy();
     if(section==='repayments') renderRepayments(1);
+    if(section==='expenses') renderExpenses(1);
     if(section==='sms') renderSmsCenter(1);
+}
+
+function expenseDateBounds(filter){
+    const todayISO=kenyaDateISO(new Date());
+    if(filter.type==='all')return null;
+    if(filter.type==='today')return [todayISO,todayISO];
+    if(filter.type==='yesterday'){
+        const day=shiftISODate(todayISO,-1);return [day,day];
+    }
+    if(filter.type==='this_week'){
+        const weekday=new Date(`${todayISO}T00:00:00Z`).getUTCDay();
+        return [shiftISODate(todayISO,-((weekday+6)%7)),todayISO];
+    }
+    if(filter.type==='this_month')return [`${todayISO.slice(0,7)}-01`,todayISO];
+    if(filter.type==='custom')return filter.start&&filter.end&&filter.start<=filter.end
+        ?[filter.start,filter.end]:null;
+    return null;
 }
 
 function kenyaDateISO(value=new Date()){
@@ -7319,11 +7349,18 @@ function openBranchModal(b={}){openModal(`<h2>${b.id?'Edit':'Add'} Branch</h2><d
 async function saveBranch(id){if(!id)return toast('Nyilora Enterprise uses one branch. Edit the existing branch.','warning');const rec={business_id:currentUser.business_id,code:$('#brCode').value.trim().toUpperCase(),name:$('#brName').value.trim(),address:$('#brAddress').value.trim()||null,phone:$('#brPhone').value.trim()||null,email:$('#brEmail').value.trim()||null,updated_at:new Date().toISOString()};if(!rec.code||!rec.name)return toast('Code and name are required','warning');const{error}=await sb('nyilora_branches').update(rec).eq('id',id).eq('business_id',currentUser.business_id);if(error)return toast(error.message,'error');await audit('branch_updated','nyilora_branches',id,null,rec);closeModal();await loadBranchContext();renderBranches()}
 async function toggleBranch(id,active){const{error}=await sb('nyilora_branches').update({is_active:active,updated_at:new Date().toISOString()}).eq('id',id).eq('business_id',currentUser.business_id).eq('is_head_office',false);if(error)return toast(error.message,'error');await audit(active?'branch_activated':'branch_deactivated','nyilora_branches',id,null,{is_active:active});await loadBranchContext();renderBranches()}
 
-async function renderExpenses(){
+async function renderExpenses(page=1){
   const main=$('#mainContent');if(!hasPermission('view_expenses')&&!hasRole('branch_manager','admin','cashier'))return toast('Expense access required','warning');
-  let q=sb('nyilora_expenses').select('*,nyilora_branches:nyilora_branches!nyilora_expenses_branch_id_fkey(name),loan_staff!nyilora_expenses_initiated_by_fkey(name)').eq('business_id',currentUser.business_id).order('expense_date',{ascending:false});if(selectedBranchId)q=q.eq('branch_id',selectedBranchId);const{data,error}=await q;if(error){toast(error.message,'error');return}
-  const rows=data||[],approved=rows.filter(x=>x.status==='approved'),pending=rows.filter(x=>x.status==='pending');
-  main.innerHTML=`<div class="page-header"><div><h1>Expenses</h1><p style="color:var(--text-secondary)">${selectedBranchId?escapeHtml(branchName(selectedBranchId)):'All Branches'}</p></div>${hasPermission('initiate_expenses')||hasRole('branch_manager')?'<button class="btn btn-primary" onclick="openExpenseModal()">+ New Expense</button>':''}</div><div class="kpi-grid"><div class="kpi-card"><div class="kpi-label">Approved Expenses</div><div class="kpi-value">${fmtMoney(approved.reduce((s,x)=>s+Number(x.amount),0))}</div></div><div class="kpi-card"><div class="kpi-label">Pending Approval</div><div class="kpi-value">${pending.length}</div></div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>Branch</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows.map(e=>`<tr><td>${fmtDate(e.expense_date)}</td><td>${escapeHtml(e.expense_no)}</td><td>${escapeHtml(e.nyilora_branches?.name||branchName(e.branch_id))}</td><td>${escapeHtml(e.custom_category||e.category)}</td><td>${escapeHtml(e.description)}</td><td><strong>${fmtMoney(e.amount)}</strong></td><td>${statusBadge(e.status)}</td><td><details style="position:relative"><summary class="btn btn-outline btn-sm">⋮</summary><div class="card" style="position:absolute;right:0;z-index:5;min-width:130px;padding:6px"><button class="btn btn-outline btn-sm" onclick='viewExpense(${JSON.stringify(e).replace(/'/g,"&#39;")})'>View</button> ${['draft','pending'].includes(e.status)?`<button class="btn btn-outline btn-sm" onclick='openExpenseModal(${JSON.stringify(e).replace(/'/g,"&#39;")})'>Edit</button>`:''} ${e.status==='pending'&&(hasPermission('approve_expenses')||hasRole('branch_manager'))?`<button class="btn btn-success btn-sm" onclick="decideExpense('${e.id}','approve')">Approve</button><button class="btn btn-danger btn-sm" onclick="decideExpense('${e.id}','reject')">Reject</button>`:''} ${['draft','pending','rejected'].includes(e.status)?`<button class="btn btn-danger btn-sm" onclick="deleteExpense('${e.id}')">Delete</button>`:''}</div></details></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center">No expenses</td></tr>'}</tbody></table></div>`;
+  const filter=appFilters.expenses,bounds=expenseDateBounds(filter);
+  if(filter.type==='custom'&&!bounds)return toast('Choose a valid expense date range','warning');
+  const{data,error}=await fetchPagedBusinessRows('nyilora_expenses',q=>{
+    if(bounds)q=q.gte('expense_date',bounds[0]).lte('expense_date',bounds[1]);
+    return q.order('expense_date',{ascending:false}).order('id',{ascending:false});
+  },'*,nyilora_branches:nyilora_branches!nyilora_expenses_branch_id_fkey(name),loan_staff!nyilora_expenses_initiated_by_fkey(name)');
+  if(error){toast(error.message,'error');return}
+  const rows=data||[],approved=rows.filter(x=>['approved','paid'].includes(x.status)),pending=rows.filter(x=>x.status==='pending');
+  const p=paginate(rows,page);
+  main.innerHTML=`<div class="page-header"><div><h1>Expenses</h1><p style="color:var(--text-secondary)">${selectedBranchId?escapeHtml(branchName(selectedBranchId)):'All Branches'}</p></div>${hasPermission('initiate_expenses')||hasRole('branch_manager')?'<button class="btn btn-primary" onclick="openExpenseModal()">+ New Expense</button>':''}</div>${getDateFilterHtml('expenses')}<div class="kpi-grid"><div class="kpi-card"><div class="kpi-label">Approved Expenses · Selected Period</div><div class="kpi-value">${fmtMoney(approved.reduce((s,x)=>s+Number(x.amount),0))}</div></div><div class="kpi-card"><div class="kpi-label">Pending Approval · Selected Period</div><div class="kpi-value">${pending.length}</div></div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>Branch</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>${p.items.map(e=>`<tr><td>${fmtDate(e.expense_date)}</td><td>${escapeHtml(e.expense_no)}</td><td>${escapeHtml(e.nyilora_branches?.name||branchName(e.branch_id))}</td><td>${escapeHtml(e.custom_category||e.category)}</td><td>${escapeHtml(e.description)}</td><td><strong>${fmtMoney(e.amount)}</strong></td><td>${statusBadge(e.status)}</td><td><details style="position:relative"><summary class="btn btn-outline btn-sm">⋮</summary><div class="card" style="position:absolute;right:0;z-index:5;min-width:130px;padding:6px"><button class="btn btn-outline btn-sm" onclick='viewExpense(${JSON.stringify(e).replace(/'/g,"&#39;")})'>View</button> ${['draft','pending'].includes(e.status)?`<button class="btn btn-outline btn-sm" onclick='openExpenseModal(${JSON.stringify(e).replace(/'/g,"&#39;")})'>Edit</button>`:''} ${e.status==='pending'&&(hasPermission('approve_expenses')||hasRole('branch_manager'))?`<button class="btn btn-success btn-sm" onclick="decideExpense('${e.id}','approve')">Approve</button><button class="btn btn-danger btn-sm" onclick="decideExpense('${e.id}','reject')">Reject</button>`:''} ${['draft','pending','rejected'].includes(e.status)?`<button class="btn btn-danger btn-sm" onclick="deleteExpense('${e.id}')">Delete</button>`:''}</div></details></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center">No expenses in this period</td></tr>'}</tbody></table></div>${paginationHtml(p,'renderExpenses')}`;
 }
 function expenseCategories(){return [
   'fuel','airtime','rent','salaries','transport','office_supplies','repairs','utilities','imprest',
